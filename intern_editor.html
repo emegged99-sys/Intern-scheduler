@@ -1,0 +1,723 @@
+<!-- Intern scheduling data editor. Single self-contained file, RTL Hebrew.
+     Imports/edits/exports a CSV in the exact schema the Python scheduler consumes. -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>עורך נתוני שיבוץ</title>
+<style>
+  :root{
+    --navy:#1F3864; --blue:#2E5496; --blue-soft:#E7ECF6;
+    --weak:#C0392B; --weak-bg:#F8CBAD; --strong:#548235; --strong-bg:#C6EFCE;
+    --mid:#9C6A00; --mid-bg:#FFF2CC;
+    --ink:#1c2330; --muted:#5A6577; --line:#D9E0EC; --surface:#fff; --page:#EEF1F6;
+    --shadow:0 1px 2px rgba(31,56,100,.06), 0 8px 24px rgba(31,56,100,.06);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    direction:rtl; background:var(--page); color:var(--ink);
+    font-family:"Segoe UI",-apple-system,system-ui,"Helvetica Neue",Arial,"Noto Sans Hebrew",sans-serif;
+    font-size:14px; line-height:1.45;
+  }
+  button{font-family:inherit; cursor:pointer}
+  input,select,textarea{font-family:inherit; font-size:14px}
+
+  /* toolbar */
+  header.bar{
+    position:sticky; top:0; z-index:20; display:flex; align-items:center; gap:14px;
+    padding:12px 22px; background:var(--navy); color:#fff; box-shadow:var(--shadow);
+  }
+  .bar h1{font-size:17px; font-weight:700; letter-spacing:.2px; margin:0}
+  .bar .count{font-size:12.5px; color:#C7D2E8; font-variant-numeric:tabular-nums}
+  .bar .spacer{flex:1}
+  .btn{
+    border:1px solid transparent; border-radius:8px; padding:8px 14px; font-size:13.5px;
+    font-weight:600; background:#fff; color:var(--navy);
+  }
+  .btn:hover{background:#f0f3fa}
+  .btn.ghost{background:transparent; color:#fff; border-color:#5870a0}
+  .btn.ghost:hover{background:#2a467a}
+  .btn.primary{background:#7FB069; color:#15300a; border-color:#6fa15a}
+  .btn.primary:hover{filter:brightness(1.05)}
+
+  main{display:grid; grid-template-columns:312px 1fr; gap:0; height:calc(100% - 57px)}
+  @media(max-width:820px){ main{grid-template-columns:1fr; height:auto} }
+
+  /* intern list */
+  aside{border-inline-start:1px solid var(--line); background:var(--surface); overflow:auto}
+  .list-head{padding:12px 16px 8px; position:sticky; top:0; background:var(--surface); border-bottom:1px solid var(--line)}
+  .search{width:100%; padding:8px 11px; border:1px solid var(--line); border-radius:8px; background:#fafbfd}
+  ul.roster{list-style:none; margin:0; padding:6px}
+  li.row{
+    padding:9px 11px; border-radius:9px; cursor:pointer; display:flex; align-items:center; gap:10px;
+    border:1px solid transparent;
+  }
+  li.row:hover{background:#f4f7fc}
+  li.row.sel{background:var(--blue-soft); border-color:#bccbe6}
+  li.row.off{opacity:.55}
+  .dot{width:8px; height:8px; border-radius:50%; flex:none; background:var(--strong)}
+  li.row.off .dot{background:#aab4c4}
+  .row-main{flex:1; min-width:0}
+  .row-name{font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .row-sub{font-size:11.5px; color:var(--muted); font-variant-numeric:tabular-nums}
+
+  /* editor */
+  section.editor{overflow:auto; padding:20px 26px 60px}
+  .empty{color:var(--muted); padding:60px 20px; text-align:center}
+  .ed-head{display:flex; align-items:center; gap:12px; margin-bottom:14px}
+  .ed-head input.name{font-size:20px; font-weight:700; border:none; border-bottom:2px solid var(--line); padding:4px 2px; background:transparent; color:var(--ink); min-width:160px}
+  .ed-head input.name:focus{outline:none; border-bottom-color:var(--blue)}
+  .id-chip{font-size:11.5px; color:var(--muted); background:#f0f3f8; border:1px solid var(--line); border-radius:20px; padding:3px 10px; font-variant-numeric:tabular-nums}
+  .ed-head .spacer{flex:1}
+  .toggle{display:inline-flex; align-items:center; gap:7px; font-size:13px; color:var(--muted)}
+  .switch{position:relative; width:40px; height:22px; background:#c7cfdc; border-radius:20px; transition:.15s}
+  .switch::after{content:""; position:absolute; top:2px; inset-inline-start:2px; width:18px; height:18px; border-radius:50%; background:#fff; transition:.15s}
+  input.sw{display:none}
+  input.sw:checked + .switch{background:var(--strong)}
+  input.sw:checked + .switch::after{inset-inline-start:20px}
+
+  .card{background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:16px 18px; margin-bottom:16px; box-shadow:var(--shadow)}
+  .card > h3{margin:0 0 12px; font-size:12px; font-weight:700; letter-spacing:.6px; color:var(--blue); text-transform:uppercase}
+  .grid-fields{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px 16px}
+  .field{display:flex; flex-direction:column; gap:4px}
+  .field label{font-size:12px; color:var(--muted)}
+  .field input,.field select,.field textarea{border:1px solid var(--line); border-radius:8px; padding:7px 9px; background:#fff}
+  .field input:focus,.field select:focus,.field textarea:focus{outline:none; border-color:var(--blue); box-shadow:0 0 0 3px rgba(46,84,150,.12)}
+  .hint{font-size:11px; color:#9aa3b2}
+
+  /* stations */
+  table.stations{width:100%; border-collapse:collapse}
+  table.stations th,table.stations td{padding:8px 6px; text-align:center; border-bottom:1px solid var(--line)}
+  table.stations th{font-size:11.5px; color:var(--muted); font-weight:600}
+  table.stations td.name{text-align:start; font-weight:600}
+  .str-seg{display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden}
+  .str-seg button{border:none; background:#fff; padding:5px 11px; font-weight:700; color:var(--muted); border-inline-start:1px solid var(--line)}
+  .str-seg button:first-child{border-inline-start:none}
+  .str-seg button[data-on="1"]{background:var(--weak-bg); color:var(--weak)}
+  .str-seg button[data-on="2"]{background:var(--mid-bg); color:var(--mid)}
+  .str-seg button[data-on="3"]{background:var(--strong-bg); color:var(--strong)}
+  .str-seg.disabled{opacity:.4; pointer-events:none}
+  .chk{width:18px; height:18px; accent-color:var(--blue)}
+
+  /* calendar */
+  .cal-top{display:flex; align-items:center; gap:10px; margin-bottom:12px; flex-wrap:wrap}
+  .cal-top select{border:1px solid var(--line); border-radius:8px; padding:6px 9px; background:#fff}
+  .legend{display:flex; gap:14px; margin-inline-start:auto; font-size:12px; color:var(--muted); align-items:center}
+  .legend i{display:inline-block; width:12px; height:12px; border-radius:3px; vertical-align:-2px; margin-inline-end:5px}
+  .cal{display:grid; grid-template-columns:repeat(7,1fr); gap:6px}
+  .cal .dow{text-align:center; font-size:11.5px; color:var(--muted); font-weight:700; padding-bottom:2px}
+  .cal .day{
+    aspect-ratio:1/1; border:1px solid var(--line); border-radius:9px; background:#fff;
+    display:flex; align-items:center; justify-content:center; font-weight:600; font-variant-numeric:tabular-nums;
+    user-select:none; position:relative;
+  }
+  .cal .day.pad{border:none; background:transparent}
+  .cal .day.wknd{background:#f4f6fa}
+  .cal .day.blocked{background:var(--weak-bg); border-color:#e8a98a; color:var(--weak)}
+  .cal .day.preferred{background:var(--strong-bg); border-color:#9ec788; color:var(--strong)}
+  .cal .day:not(.pad){cursor:pointer}
+  .cal .day:not(.pad):hover{box-shadow:0 0 0 2px var(--blue) inset}
+
+  .warns{margin-top:6px}
+  .warn{display:inline-block; font-size:12px; color:#8a5a00; background:#fff6e0; border:1px solid #f0d79a; border-radius:7px; padding:4px 9px; margin:3px 6px 0 0}
+  .danger{display:flex; justify-content:flex-end; margin-top:8px}
+  .btn.del{color:var(--weak); border-color:#e3b4a8; background:#fff}
+  .btn.del:hover{background:#fbe9e4}
+  .toast{position:fixed; inset-block-end:22px; inset-inline:0; margin:auto; width:max-content; max-width:90%; background:var(--navy); color:#fff; padding:11px 18px; border-radius:10px; box-shadow:var(--shadow); opacity:0; transform:translateY(8px); transition:.2s; pointer-events:none}
+  .toast.show{opacity:1; transform:none}
+  input[type=file]{display:none}
+
+  /* tabs */
+  .tabs{display:inline-flex; gap:4px; background:#16294d; border-radius:9px; padding:3px}
+  .tab{border:none; background:transparent; color:#aebbd6; padding:7px 16px; border-radius:7px; font-weight:600; font-size:13.5px}
+  .tab.active{background:#fff; color:var(--navy)}
+  .view[hidden]{display:none}
+
+  /* external duties grid */
+  .ext-wrap{padding:20px 26px 60px; overflow:auto; height:calc(100% - 57px)}
+  .ext-toolbar{display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap}
+  .ext-toolbar select{border:1px solid var(--line); border-radius:8px; padding:7px 10px; background:#fff}
+  .ext-intro{color:var(--muted); font-size:13px; margin-bottom:14px; max-width:760px; line-height:1.6}
+  table.ext{border-collapse:separate; border-spacing:0; width:100%; max-width:880px; background:#fff; border:1px solid var(--line); border-radius:12px; overflow:hidden; box-shadow:var(--shadow)}
+  table.ext th{background:var(--blue); color:#fff; font-size:12px; font-weight:600; padding:9px 6px; text-align:center; position:sticky; top:0}
+  table.ext th.daycol{background:var(--navy); width:74px}
+  table.ext td{border-top:1px solid var(--line); padding:3px; text-align:center}
+  table.ext td.daycol{font-weight:700; color:var(--ink); font-variant-numeric:tabular-nums; background:#f7f9fc; white-space:nowrap}
+  table.ext tr.wknd td.daycol{color:var(--weak)}
+  table.ext tr.wknd td{background:#fbf7f4}
+  table.ext input{width:100%; border:1px solid transparent; border-radius:6px; padding:6px 4px; text-align:center; font-size:12.5px; background:transparent}
+  table.ext input:hover{border-color:var(--line)}
+  table.ext input:focus{outline:none; border-color:var(--blue); background:#fff; box-shadow:0 0 0 3px rgba(46,84,150,.12)}
+  table.ext input:not(:placeholder-shown){background:var(--mid-bg); font-weight:600; color:#5e4500}
+  .ext-count{font-size:12.5px; color:var(--muted)}
+
+  /* holidays */
+  .cal .day.holeve{background:#e7e0f7; border-color:#b9a7e0; color:#5b3fa0}
+  .cal .day.holday{background:#cdbdf0; border-color:#9b80d8; color:#46278f}
+  .hol-list{max-width:520px; margin-top:18px}
+  .hol-list h3{font-size:12px; font-weight:700; letter-spacing:.6px; color:#5b3fa0; text-transform:uppercase; margin:0 0 8px}
+  .hol-row{display:flex; align-items:center; gap:10px; padding:7px 10px; border:1px solid var(--line); border-radius:9px; margin-bottom:6px; background:#fff}
+  .hol-row .date{font-weight:700; font-variant-numeric:tabular-nums; min-width:54px}
+  .hol-row .kind{font-size:12px; font-weight:600; padding:2px 9px; border-radius:20px}
+  .hol-row .kind.eve{background:#e7e0f7; color:#5b3fa0}
+  .hol-row .kind.day{background:#cdbdf0; color:#46278f}
+  .hol-row input{flex:1; border:1px solid var(--line); border-radius:7px; padding:6px 9px; background:#fafbfd}
+  .hol-row input:focus{outline:none; border-color:var(--blue)}
+  .hol-empty{color:var(--muted); font-size:13px}
+</style>
+
+<header class="bar">
+  <h1>עורך נתוני שיבוץ</h1>
+  <div class="tabs">
+    <button class="tab active" id="tabInterns">מתמחים</button>
+    <button class="tab" id="tabExternal">תורני חוץ</button>
+    <button class="tab" id="tabHolidays">חגים</button>
+    <button class="tab" id="tabGenerate">יצירת שיבוץ</button>
+  </div>
+  <span class="count" id="count"></span>
+  <span class="spacer"></span>
+  <span id="actionsInterns" style="display:contents">
+    <button class="btn ghost" id="addBtn">+ מתמחה חדש</button>
+    <label class="btn ghost" for="importInput">ייבוא CSV</label>
+    <input type="file" id="importInput" accept=".csv,text/csv">
+    <button class="btn primary" id="exportBtn">ייצוא CSV</button>
+  </span>
+  <span id="actionsExternal" style="display:none">
+    <label class="btn ghost" for="importExtInput">ייבוא CSV</label>
+    <input type="file" id="importExtInput" accept=".csv,text/csv">
+    <button class="btn primary" id="exportExtBtn">ייצוא תורני חוץ</button>
+  </span>
+  <span id="actionsHolidays" style="display:none">
+    <label class="btn ghost" for="importHolInput">ייבוא CSV</label>
+    <input type="file" id="importHolInput" accept=".csv,text/csv">
+    <button class="btn primary" id="exportHolBtn">ייצוא חגים</button>
+  </span>
+  <span id="actionsGenerate" style="display:none"></span>
+</header>
+
+<main class="view" id="view-interns">
+  <aside>
+    <div class="list-head"><input class="search" id="search" placeholder="חיפוש מתמחה…"></div>
+    <ul class="roster" id="roster"></ul>
+  </aside>
+  <section class="editor" id="editor"><div class="empty">בחר מתמחה מהרשימה, או הוסף חדש.</div></section>
+</main>
+
+<div class="view ext-wrap" id="view-external" hidden>
+  <div class="ext-toolbar">
+    <select id="extM"></select>
+    <select id="extY"></select>
+    <span class="ext-count" id="extCount"></span>
+  </div>
+  <div class="ext-intro">הזן את שם תורן החוץ בתא של היום והעמדה שהוא מכסה. כל תא מלא = משבצת שמוסרת משיבוץ המתמחים (מה שמפחית את העומס). הייצוא יוצר קובץ <code>external_&lt;חודש&gt;.csv</code> שמועבר לסקריפט כארגומנט החמישי.</div>
+  <table class="ext" id="extTable"></table>
+</div>
+
+<div class="view ext-wrap" id="view-holidays" hidden>
+  <div class="ext-toolbar">
+    <select id="holM"></select>
+    <select id="holY"></select>
+    <span class="legend">
+      <span><i style="background:#e7e0f7;border:1px solid #b9a7e0"></i>ערב חג (כמו שישי)</span>
+      <span><i style="background:#cdbdf0;border:1px solid #9b80d8"></i>חג (כמו שבת)</span>
+    </span>
+  </div>
+  <div class="ext-intro">לחיצה על יום מסמנת אותו: רגיל ← ערב חג ← חג ← רגיל. ערב חג מתנהג כשישי והחג כשבת לצורכי איזון סופי־שבוע ותקרות. אפשר להוסיף שם לכל חג ברשימה למטה. הייצוא יוצר <code>holidays_&lt;חודש&gt;.csv</code>.</div>
+  <div class="cal" id="holCal" style="max-width:560px"></div>
+  <div class="hol-list" id="holList"></div>
+</div>
+
+<div class="view ext-wrap" id="view-generate" hidden>
+  <div class="ext-intro" style="max-width:640px">
+    השיבוץ מיוצר על ידי שרת שמריץ את <code>monthly_scheduler.py</code>. יש לפרוס את השרת פעם אחת (ראו קובץ README שצורף), להדביק כאן את הכתובת שלו, ואז ליצור שיבוצים ישירות מהדפדפן ללא הורדה/העלאה ידנית של קבצים.
+  </div>
+  <div class="card" style="max-width:640px">
+    <h3>הגדרות שרת</h3>
+    <div class="grid-fields">
+      <div class="field"><label>כתובת השרת (Backend URL)</label>
+        <input id="genBackend" placeholder="https://your-app.onrender.com" value="">
+      </div>
+      <div class="field"><label>סיסמת שרת</label>
+        <input id="genPassword" type="password" placeholder="הסיסמה שהוגדרה ב-APP_PASSWORD">
+      </div>
+      <div class="field"><label>שנה</label><input id="genYear" type="number" value="2026"></div>
+      <div class="field"><label>חודש</label><input id="genMonth" type="number" min="1" max="12" value="7"></div>
+    </div>
+    <div class="hint" style="margin-top:8px">הכתובת והסיסמה נשמרות בדפדפן שלך (localStorage בעמוד זה בלבד) כדי שלא תצטרך להזין אותן שוב.</div>
+  </div>
+  <div class="card" style="max-width:640px">
+    <h3>יצירת שיבוץ</h3>
+    <p class="hint" style="margin:0 0 12px">משתמש בנתוני המתמחים / תורני החוץ / החגים שערוכים כרגע בעורך (לא צריך לייצא קבצים בנפרד).</p>
+    <button class="btn primary" id="genBtn">צור שיבוץ והורד Excel</button>
+    <div id="genStatus" class="hint" style="margin-top:10px"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const SEED_B64 = "aWQsbmFtZSxhY3RpdmUscmVsaWdpb24scHJlZmVycmVkU3RhdGlvbklkLG5vdGVzLG1heFRvdGFsU2hpZnRzLG1heEZyaWRheVNoaWZ0cyxtYXhTYXR1cmRheVNoaWZ0cyxtYXhXZWVrZW5kU2hpZnRzLGJsb2NrZWREYXRlcyxwcmVmZXJyZWREYXRlcyxhcHByb3ZlZF9lcjEsc3RyZW5ndGhfZXIxLGFwcHJvdmVkX2VyMixzdHJlbmd0aF9lcjIsYXBwcm92ZWRfbmljdTEsc3RyZW5ndGhfbmljdTEsYXBwcm92ZWRfbmljdTIsc3RyZW5ndGhfbmljdTIsYXBwcm92ZWRfd2FyZCxzdHJlbmd0aF93YXJkLGFwcHJvdmVkX3BpY3Usc3RyZW5ndGhfcGljdQ0KaW50ZXJuLTEs15DXpNeo16osVFJVRSxqZXdpc2gsLGlmIHdlZWtlbmQgdGhlbiBvbmx5IG9uZSBhbmQgZnJpZGF5OyBtYXggNSBkdXRpZXMsNSwxLDAsMSwiMjAyNi0wNy0wNSwgMjAyNi0wNy0wNiIsLDEsMywxLDMsMSwzLDEsMywxLCwxLDMNCmludGVybi0yLNec15nXkNeqLFRSVUUsamV3aXNoLCwsLCwsLCIyMDI2LTA3LTAzLCAyMDI2LTA3LTIyLCAyMDI2LTA3LTIzIiwsMSwzLDEsMywxLDMsMSwzLDEsLDEsMw0KaW50ZXJuLTMs16LXmdeg15EsVFJVRSxqZXdpc2gsLCwsLCwsIjIwMjYtMDctMTksIDIwMjYtMDctMjAsIDIwMjYtMDctMjEiLDIwMjYtMDctMTcsMSwzLDEsMywxLDMsMSwzLDEsLDEsMw0KaW50ZXJuLTI3LNeZ15XXm9eR15MsVFJVRSxqZXdpc2gsLCJtaWQtbW9udGggc3RhcnQgRVIxLCBmaXJzdCBFUjIgbXVzdCBiZSBwYWlyZWQgd2l0aCBzb21lb25lIHdobyBhbHNvIGRvZXMgRVIxLCB0aGVuIEVSMSB3ZWFrIiwsLCwsIjIwMjYtMDctMDEsIDIwMjYtMDctMDIsIDIwMjYtMDctMDMsIDIwMjYtMDctMDQsIDIwMjYtMDctMDksIDIwMjYtMDctMTAsIDIwMjYtMDctMTEsIDIwMjYtMDctMjIsIDIwMjYtMDctMjMiLCIyMDI2LTA3LTA4LCAyMDI2LTA3LTE3LCAyMDI2LTA3LTIxLCAyMDI2LTA3LTI4IiwwLDEsMSwxLDEsMywxLDMsMSwsMCwyDQppbnRlcm4tNCzXnteV15fXnteTLFRSVUUsbXVzbGltLCwsLCwsLCIyMDI2LTA3LTA3LCAyMDI2LTA3LTA4LCAyMDI2LTA3LTIxIiwsMSwzLDEsMywxLDMsMSwzLDEsLDEsMw0KaW50ZXJuLTUs15zXmdeU15ksVFJVRSxqZXdpc2gsLHNhbmR3aWNoZXMgcG9zc2libGUsLCwsLCIyMDI2LTA3LTAxLCAyMDI2LTA3LTA0LCAyMDI2LTA3LTE4LCAyMDI2LTA3LTE5LCAyMDI2LTA3LTIwLCAyMDI2LTA3LTIxLCAyMDI2LTA3LTIyLCAyMDI2LTA3LTIzLCAyMDI2LTA3LTI0LCAyMDI2LTA3LTI1LCAyMDI2LTA3LTI2LCAyMDI2LTA3LTI3LCAyMDI2LTA3LTI4LCAyMDI2LTA3LTI5LCAyMDI2LTA3LTMwLCAyMDI2LTA3LTMxIiwsMSwzLDEsMywxLDMsMSwzLDEsLDEsMw0KaW50ZXJuLTYs15DXldeo15nXkNecLFRSVUUsamV3aXNoLCwsLCwsLCIyMDI2LTA3LTAxLCAyMDI2LTA3LTAyLCAyMDI2LTA3LTAzLCAyMDI2LTA3LTA0LCAyMDI2LTA3LTA1LCAyMDI2LTA3LTA2LCAyMDI2LTA3LTA3IiwiMjAyNi0wNy0xNCwgMjAyNi0wNy0yMSwgMjAyNi0wNy0yOCIsMSwyLDEsMiwwLDEsMCwxLDEsLDEsMg0KaW50ZXJuLTcs15DXkdeZ16LXkyxGQUxTRSxqZXdpc2gsLCwsLCwsIjIwMjYtMDctMDEsIDIwMjYtMDctMDIsIDIwMjYtMDctMDMsIDIwMjYtMDctMDQsIDIwMjYtMDctMDUsIDIwMjYtMDctMDYsIDIwMjYtMDctMDcsIDIwMjYtMDctMDgsIDIwMjYtMDctMDksIDIwMjYtMDctMTAsIDIwMjYtMDctMTEsIDIwMjYtMDctMTIsIDIwMjYtMDctMTMsIDIwMjYtMDctMTQsIDIwMjYtMDctMTUsIDIwMjYtMDctMTYsIDIwMjYtMDctMTcsIDIwMjYtMDctMTgsIDIwMjYtMDctMTksIDIwMjYtMDctMjAsIDIwMjYtMDctMjEsIDIwMjYtMDctMjIsIDIwMjYtMDctMjMsIDIwMjYtMDctMjQsIDIwMjYtMDctMjUsIDIwMjYtMDctMjYsIDIwMjYtMDctMjcsIDIwMjYtMDctMjgsIDIwMjYtMDctMjksIDIwMjYtMDctMzAsIDIwMjYtMDctMzEiLCwxLDMsMSwzLDEsMywxLDMsMSwsMSwzDQppbnRlcm4tOCzXqdeo15QsVFJVRSxqZXdpc2gsLCwsLCwsMjAyNi0wNy0wMSwsMSwxLDEsMSwxLDMsMSwzLDEsLDAsMg0KaW50ZXJuLTks15DXqNeZ15DXnCxGQUxTRSxqZXdpc2gsLCwsLCwsIjIwMjYtMDctMDEsIDIwMjYtMDctMDIsIDIwMjYtMDctMDMsIDIwMjYtMDctMDQsIDIwMjYtMDctMDUsIDIwMjYtMDctMDYsIDIwMjYtMDctMDcsIDIwMjYtMDctMDgsIDIwMjYtMDctMDksIDIwMjYtMDctMTAsIDIwMjYtMDctMTEsIDIwMjYtMDctMTIsIDIwMjYtMDctMTMsIDIwMjYtMDctMTQsIDIwMjYtMDctMTUsIDIwMjYtMDctMTYsIDIwMjYtMDctMTcsIDIwMjYtMDctMTgsIDIwMjYtMDctMTksIDIwMjYtMDctMjAsIDIwMjYtMDctMjEsIDIwMjYtMDctMjIsIDIwMjYtMDctMjMsIDIwMjYtMDctMjQsIDIwMjYtMDctMjUsIDIwMjYtMDctMjYsIDIwMjYtMDctMjcsIDIwMjYtMDctMjgsIDIwMjYtMDctMjksIDIwMjYtMDctMzAsIDIwMjYtMDctMzEiLCwwLDEsMSwzLDEsMywxLDMsMSwsMCwyDQppbnRlcm4tMTAs15zXldeR16DXkCxUUlVFLG11c2xpbSwsLCwsLCwiMjAyNi0wNy0wNCwgMjAyNi0wNy0xNiwgMjAyNi0wNy0xNywgMjAyNi0wNy0xOCIsMjAyNi0wNy0xNSwxLDIsMSwyLDEsMywxLDMsMSwsMCwyDQppbnRlcm4tMTEs16jXkdeZ15MsVFJVRSxqZXdpc2gsLCwsLCwsLCwwLDEsMSwyLDAsMSwxLDIsMSwsMCwyDQppbnRlcm4tMTIs15nXqdeZLFRSVUUsamV3aXNoLCxtb3N0IGR1dGllcyBzaG91bGQgYmUgaW4gZmlyc3QgMyB3ZWVrcywsLCwsIjIwMjYtMDctMDMsIDIwMjYtMDctMDQiLCwwLDEsMSwzLDAsMSwxLDIsMSwsMCwyDQppbnRlcm4tMTMs15DXoNeULFRSVUUsamV3aXNoLCwsLCwsLCIyMDI2LTA3LTAzLCAyMDI2LTA3LTA0IiwsMCwxLDEsMywwLDEsMSwyLDEsLDAsMg0KaW50ZXJuLTE0LNeR16jXmdeqLEZBTFNFLGpld2lzaCxuaWN1MSwibWFpbmx5IE5JQ1UxLCBjYW4gYWxzbyBFUjIiLCwsLCwiMjAyNi0wNy0wMSwgMjAyNi0wNy0wMiwgMjAyNi0wNy0wMywgMjAyNi0wNy0wNCwgMjAyNi0wNy0wNSwgMjAyNi0wNy0wNiwgMjAyNi0wNy0wNywgMjAyNi0wNy0wOCwgMjAyNi0wNy0wOSwgMjAyNi0wNy0xMCwgMjAyNi0wNy0xMSwgMjAyNi0wNy0xMiwgMjAyNi0wNy0xMywgMjAyNi0wNy0xNCwgMjAyNi0wNy0xNSwgMjAyNi0wNy0xNiwgMjAyNi0wNy0xNywgMjAyNi0wNy0xOCwgMjAyNi0wNy0xOSwgMjAyNi0wNy0yMCwgMjAyNi0wNy0yMSwgMjAyNi0wNy0yMiwgMjAyNi0wNy0yMywgMjAyNi0wNy0yNCwgMjAyNi0wNy0yNSwgMjAyNi0wNy0yNiwgMjAyNi0wNy0yNywgMjAyNi0wNy0yOCwgMjAyNi0wNy0yOSwgMjAyNi0wNy0zMCwgMjAyNi0wNy0zMSIsLDAsMSwxLDMsMSwzLDEsMywxLCwwLDINCmludGVybi0xNSzXkNeR15nXlCxUUlVFLGpld2lzaCxuaWN1MSwibWFpbmx5IE5JQ1UxLCBjYW4gYWxzbyBFUjIiLCwsLCwyMDI2LTA3LTIzLCwwLDEsMSwzLDEsMywxLDMsMSwsMCwyDQppbnRlcm4tMTYs15TXqNeQ15wsVFJVRSxqZXdpc2gsLCwsLCwsIjIwMjYtMDctMTcsIDIwMjYtMDctMjEsIDIwMjYtMDctMzAiLCwwLDEsMCwxLDAsMSwxLDIsMSwsMSwxDQppbnRlcm4tMTcs157XldeoLFRSVUUsamV3aXNoLG5pY3UyLGFzIG11Y2ggYXMgcG9zc2libGUgaW4gTklDVTEsLCwsLCIyMDI2LTA3LTAxLCAyMDI2LTA3LTI1IiwiMjAyNi0wNy0wMywgMjAyNi0wNy0xNyIsMCwxLDEsMywxLDIsMSwzLDEsLDAsMg0KaW50ZXJuLTI4LNec16LXnNeQLFRSVUUsamV3aXNoLCwsLCwsLCIyMDI2LTA3LTAxLCAyMDI2LTA3LTIzLCAyMDI2LTA3LTI0LCAyMDI2LTA3LTI1LCAyMDI2LTA3LTMwIiwiMjAyNi0wNy0wOCwgMjAyNi0wNy0xMywgMjAyNi0wNy0yNyIsMCwxLDAsMSwwLDEsMCwxLDEsLDAsMg0KaW50ZXJuLTE4LNeq15DXnNeQLFRSVUUsbXVzbGltLCwsLCwsLCIyMDI2LTA3LTE2LCAyMDI2LTA3LTE3LCAyMDI2LTA3LTE4LCAyMDI2LTA3LTE5IiwyMDI2LTA3LTEwLDAsMSwxLDMsMCwxLDAsMSwxLCwwLDINCmludGVybi0xOSzXotec15ksVFJVRSxtdXNsaW0sZXIyLCwsLCwsIjIwMjYtMDctMTQsIDIwMjYtMDctMjgiLCwwLDEsMSwzLDAsMSwwLDEsMSwsMCwyDQppbnRlcm4tMjAs15PXldeg15nXkCxUUlVFLG11c2xpbSwsLCwsLCwiMjAyNi0wNy0wMSwgMjAyNi0wNy0wMiwgMjAyNi0wNy0wMywgMjAyNi0wNy0wNCIsLDAsMSwxLDEsMCwxLDAsMSwxLCwwLDINCmludGVybi0yMSzXqdeg15kg157Xodeg16gsVFJVRSxqZXdpc2gsLCwsLCwsIjIwMjYtMDctMDEsIDIwMjYtMDctMDIsIDIwMjYtMDctMDMsIDIwMjYtMDctMDQsIDIwMjYtMDctMjQsIDIwMjYtMDctMjkiLCwwLDEsMSwxLDAsMSwwLDEsMSwsMCwyDQppbnRlcm4tMjIs16LXmdeT15nXqixUUlVFLGpld2lzaCwsLCwsLCwiMjAyNi0wNy0wMywgMjAyNi0wNy0wNCwgMjAyNi0wNy0yMiwgMjAyNi0wNy0yMyIsIjIwMjYtMDctMTQsIDIwMjYtMDctMjgiLDAsMSwxLDEsMCwxLDAsMSwxLCwwLDINCmludGVybi0yMyzXmdeQ15nXqCxUUlVFLGpld2lzaCwsLCwsLCwiMjAyNi0wNy0wMiwgMjAyNi0wNy0yMSwgMjAyNi0wNy0yMiIsLDAsMSwxLDEsMCwxLDAsMSwxLCwwLDINCmludGVybi0yNCzXqdeo15nXqixUUlVFLGpld2lzaCwsLCwsLCwiMjAyNi0wNy0wMSwgMjAyNi0wNy0wMiwgMjAyNi0wNy0wMywgMjAyNi0wNy0xMCwgMjAyNi0wNy0xMSIsMjAyNi0wNy0wOCwwLDEsMCwxLDAsMSwwLDEsMSwsMCwyDQppbnRlcm4tMjUs16jXlixUUlVFLGpld2lzaCwsLCwsLCwsIjIwMjYtMDctMTMsIDIwMjYtMDctMjkiLDAsMSwwLDEsMCwxLDAsMSwxLCwwLDINCmludGVybi0yNizXkNec15QsVFJVRSxqZXdpc2gsLCwsLCwsIjIwMjYtMDctMDksIDIwMjYtMDctMTAsIDIwMjYtMDctMTEsIDIwMjYtMDctMjQiLCwwLDEsMCwxLDAsMSwwLDEsMSwsMCwyDQppbnRlcm4tMjks157XldeX157XkyDXoNeq16nXlCxUUlVFLGpld2lzaCwsIm1heCA0IGR1dGllcywgbm8gd2Vla2VuZHMiLDQsMCwwLDAsIjIwMjYtMDctMDMsIDIwMjYtMDctMDcsIDIwMjYtMDctMTQsIDIwMjYtMDctMjEsIDIwMjYtMDctMjgiLCwwLDEsMCwxLDAsMSwwLDEsMSwsMCwy";
+const ST = [["er1","מיון 1"],["er2","מיון 2"],["nicu1","פגיה 1"],["nicu2","פגיה 2"],["ward","מחלקה"],["picu",'טיפ"נ']];
+const PAIRED = new Set(["er1","er2","nicu1","nicu2"]); // strength matters (pair rule)
+const CROSS = new Set(["picu","er1"]);                 // strength matters (picu->er1 rule)
+const COLS = ["id","name","active","religion","preferredStationId","notes",
+  "maxTotalShifts","maxFridayShifts","maxSaturdayShifts","maxWeekendShifts","blockedDates","preferredDates",
+  "approved_er1","strength_er1","approved_er2","strength_er2","approved_nicu1","strength_nicu1",
+  "approved_nicu2","strength_nicu2","approved_ward","strength_ward","approved_picu","strength_picu"];
+const HEB_DOW = ["א","ב","ג","ד","ה","ו","ש"];
+const MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
+const EXT_SEED_B64 = "ZGF5LHN0YXRpb24sbmFtZQoxLG5pY3UyLNeQ15nXkdeo15TXmdedCjEsd2FyZCzXk9eZ16DXkAoyLG5pY3UyLNei15zXmSDXkAo2LG5pY3UyLNep15XXldeQ16gKNyx3YXJkLNeT15nXoNeQCjgsbmljdTIs15DXmdeR16jXlNeZ150KOCxuaWN1MSzXkNee15DXnCDXogo5LG5pY3UyLNei15zXmSDXkAoxMyxuaWN1MizXqdeV15XXkNeoCjE1LG5pY3UyLNeQ15nXkdeo15TXmdedCjE2LG5pY3UyLNei15zXmSDXkAoxNixuaWN1MSzXkNee15DXnCDXpAoyMCxuaWN1MizXqdeV15XXkNeoCjIxLHdhcmQs15PXmdeg15AKMjIsbmljdTIs15DXmdeR16jXlNeZ150KMjMsbmljdTIs16LXnNeZINeQCjIzLG5pY3UxLNeQ157XkNecINekCjI3LG5pY3UyLNep15XXldeQ16gKMjcsd2FyZCzXk9eZ16DXkAoyOSxuaWN1MizXkNeZ15HXqNeU15nXnQoyOSxuaWN1MSzXkNee15DXnCDXogozMCxuaWN1MizXotec15kg15AKMzAsbmljdTEs15DXnteQ15wg16QK";
+
+let interns = [], selId = null, calY = 2026, calM = 7, filter = "";
+
+/* ---------- CSV ---------- */
+function parseCSV(text){
+  text = text.replace(/\r\n/g,"\n").replace(/\r/g,"\n");
+  const rows=[]; let f="",rec=[],q=false;
+  for(let k=0;k<text.length;k++){const c=text[k];
+    if(q){ if(c==='"'){ if(text[k+1]==='"'){f+='"';k++;} else q=false; } else f+=c; }
+    else { if(c==='"')q=true; else if(c===","){rec.push(f);f="";}
+      else if(c==="\n"){rec.push(f);rows.push(rec);rec=[];f="";} else f+=c; }
+  }
+  if(f!==""||rec.length){rec.push(f);rows.push(rec);}
+  const hd=rows.shift()||[];
+  return rows.filter(r=>r.some(x=>x!=="")).map(r=>{const o={};hd.forEach((h,i)=>o[h.trim()]=r[i]??"");return o;});
+}
+function parseDates(s){
+  return [...new Set((s||"").split(",").map(x=>x.trim()).filter(Boolean))].sort();
+}
+function fromRow(o){
+  const approved={}, strength={};
+  ST.forEach(([k])=>{approved[k]=(o["approved_"+k]||"").trim()==="1"; strength[k]=(o["strength_"+k]||"").trim();});
+  return {
+    id:(o.id||"").trim(), name:(o.name||"").trim(),
+    active:(o.active||"").trim().toLowerCase()==="true",
+    religion:(o.religion||"").trim(), preferredStationId:(o.preferredStationId||"").trim(), notes:o.notes||"",
+    maxTotalShifts:(o.maxTotalShifts||"").trim(), maxFridayShifts:(o.maxFridayShifts||"").trim(),
+    maxSaturdayShifts:(o.maxSaturdayShifts||"").trim(), maxWeekendShifts:(o.maxWeekendShifts||"").trim(),
+    blocked:parseDates(o.blockedDates), preferred:parseDates(o.preferredDates),
+    approved, strength
+  };
+}
+function esc(v){v=String(v??""); return /[",\n]/.test(v) ? '"'+v.replace(/"/g,'""')+'"' : v;}
+function toCSV(){
+  const out=[COLS.join(",")];
+  for(const it of interns){
+    const m={
+      id:it.id, name:it.name, active:it.active?"TRUE":"FALSE", religion:it.religion,
+      preferredStationId:it.preferredStationId, notes:it.notes,
+      maxTotalShifts:it.maxTotalShifts, maxFridayShifts:it.maxFridayShifts,
+      maxSaturdayShifts:it.maxSaturdayShifts, maxWeekendShifts:it.maxWeekendShifts,
+      blockedDates:it.blocked.slice().sort().join(", "),
+      preferredDates:it.preferred.slice().sort().join(", "),
+    };
+    ST.forEach(([k])=>{m["approved_"+k]=it.approved[k]?"1":"0"; m["strength_"+k]=it.strength[k]||"";});
+    out.push(COLS.map(c=>esc(m[c])).join(","));
+  }
+  return out.join("\n")+"\n";
+}
+
+/* ---------- helpers ---------- */
+const $ = s=>document.querySelector(s);
+function toast(msg){const t=$("#toast");t.textContent=msg;t.classList.add("show");clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove("show"),2200);}
+function approvedCount(it){return ST.reduce((n,[k])=>n+(it.approved[k]?1:0),0);}
+function nextId(){
+  let mx=0; for(const it of interns){const mm=/(\d+)/.exec(it.id); if(mm)mx=Math.max(mx,+mm[1]);}
+  return "intern-"+(mx+1);
+}
+function iso(y,m,d){return `${y}-${String(m).padStart(2,"0")}-${String(d).padStart(2,"0")}`;}
+
+/* ---------- render: roster ---------- */
+function renderRoster(){
+  const ul=$("#roster"); ul.innerHTML="";
+  const q=filter.trim();
+  const items=interns.filter(it=>!q || it.name.includes(q) || it.id.includes(q));
+  for(const it of items){
+    const li=document.createElement("li");
+    li.className="row"+(it.id===selId?" sel":"")+(it.active?"":" off");
+    li.dataset.id=it.id;
+    li.innerHTML=`<span class="dot"></span><div class="row-main">
+      <div class="row-name">${escapeHtml(it.name||"(ללא שם)")}</div>
+      <div class="row-sub">${approvedCount(it)} תחנות · ${it.blocked.length} חסומים · ${it.preferred.length} מועדפים${it.active?"":" · לא פעיל"}</div>
+      </div>`;
+    li.onclick=()=>{selId=it.id; renderAll();};
+    ul.appendChild(li);
+  }
+  $("#count").textContent=`${interns.length} מתמחים · ${interns.filter(i=>i.active).length} פעילים`;
+}
+function escapeHtml(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+
+/* ---------- render: editor ---------- */
+function renderEditor(){
+  const host=$("#editor");
+  const it=interns.find(x=>x.id===selId);
+  if(!it){host.innerHTML='<div class="empty">בחר מתמחה מהרשימה, או הוסף חדש.</div>';return;}
+
+  const fields=[
+    ["religion","דת","text"],["preferredStationId","תחנה מועדפת","station"],
+    ["maxTotalShifts","מקס׳ תורנויות","num"],["maxFridayShifts","מקס׳ שישי","num"],
+    ["maxSaturdayShifts","מקס׳ שבת","num"],["maxWeekendShifts","מקס׳ סופ״ש","num"],
+  ];
+  const fieldHtml=fields.map(([k,lab,t])=>{
+    if(t==="station"){
+      const opts=['<option value="">— ללא —</option>'].concat(ST.map(([s,n])=>`<option value="${s}" ${it.preferredStationId===s?"selected":""}>${n}</option>`)).join("");
+      return `<div class="field"><label>${lab}</label><select data-f="${k}">${opts}</select></div>`;
+    }
+    const val=escapeHtml(it[k]);
+    return `<div class="field"><label>${lab}</label><input data-f="${k}" ${t==="num"?'type="number" min="0"':""} value="${val}" placeholder="${t==="num"?"ללא הגבלה":""}"></div>`;
+  }).join("");
+
+  const stRows=ST.map(([k,n])=>{
+    const on=it.approved[k], s=it.strength[k]||"";
+    const note = PAIRED.has(k) ? "צמד" : (k==="picu"?"⟵מיון1":"");
+    const seg=[1,2,3].map(v=>`<button data-st="${k}" data-v="${v}" ${String(v)===s?`data-on="${v}"`:""}>${v}</button>`).join("");
+    return `<tr>
+      <td class="name">${n} ${note?`<span class="hint">${note}</span>`:""}</td>
+      <td><input type="checkbox" class="chk" data-appr="${k}" ${on?"checked":""}></td>
+      <td><span class="str-seg ${on?"":"disabled"}" data-seg="${k}">${seg}</span></td>
+    </tr>`;
+  }).join("");
+
+  // warnings
+  const w=[];
+  if(approvedCount(it)===0) w.push("לא מאושר לאף תחנה");
+  ST.forEach(([k,n])=>{ if(it.approved[k] && (PAIRED.has(k)||CROSS.has(k)) && !it.strength[k]) w.push(`חסר חוזק ב${n}`); });
+  const warnHtml = w.length?`<div class="warns">${w.map(x=>`<span class="warn">${x}</span>`).join("")}</div>`:"";
+
+  host.innerHTML=`
+    <div class="ed-head">
+      <input class="name" data-f="name" value="${escapeHtml(it.name)}" placeholder="שם המתמחה">
+      <span class="id-chip">${escapeHtml(it.id)}</span>
+      <span class="spacer"></span>
+      <label class="toggle"><input class="sw" type="checkbox" data-active ${it.active?"checked":""}><span class="switch"></span>פעיל</label>
+    </div>
+
+    <div class="card"><h3>פרטים ותקרות</h3>
+      <div class="grid-fields">${fieldHtml}</div>
+      <div class="field" style="margin-top:12px"><label>הערות</label><textarea data-f="notes" rows="2" placeholder="הערות חופשיות">${escapeHtml(it.notes)}</textarea></div>
+    </div>
+
+    <div class="card"><h3>אישורי תחנות וחוזק</h3>
+      <table class="stations"><thead><tr><th style="text-align:start">תחנה</th><th>מאושר</th><th>חוזק (1·2·3)</th></tr></thead>
+      <tbody>${stRows}</tbody></table>
+      ${warnHtml}
+    </div>
+
+    <div class="card"><h3>ימים חסומים ומועדפים</h3>
+      <div class="cal-top">
+        <select id="calM">${MONTHS.map((m,i)=>`<option value="${i+1}" ${i+1===calM?"selected":""}>${m}</option>`).join("")}</select>
+        <select id="calY">${[2025,2026,2027,2028].map(y=>`<option ${y===calY?"selected":""}>${y}</option>`).join("")}</select>
+        <span class="legend"><span><i style="background:var(--weak-bg);border:1px solid #e8a98a"></i>חסום</span><span><i style="background:var(--strong-bg);border:1px solid #9ec788"></i>מועדף</span></span>
+      </div>
+      <div class="hint" style="margin-bottom:8px">לחיצה על יום מחליפה: רגיל ← חסום ← מועדף ← רגיל. ימים מחודשים אחרים נשמרים.</div>
+      <div class="cal" id="cal"></div>
+    </div>
+
+    <div class="danger"><button class="btn del" id="delBtn">מחיקת מתמחה</button></div>
+  `;
+  renderCalendar(it);
+}
+
+function renderCalendar(it){
+  const cal=$("#cal"); if(!cal)return;
+  cal.innerHTML="";
+  HEB_DOW.forEach(d=>{const e=document.createElement("div");e.className="dow";e.textContent=d;cal.appendChild(e);});
+  const first=new Date(calY,calM-1,1).getDay();          // 0=Sun
+  const ndays=new Date(calY,calM,0).getDate();
+  for(let i=0;i<first;i++){const e=document.createElement("div");e.className="day pad";cal.appendChild(e);}
+  for(let d=1;d<=ndays;d++){
+    const id=iso(calY,calM,d);
+    const dow=new Date(calY,calM-1,d).getDay();
+    const e=document.createElement("div");
+    let cls="day"+((dow===5||dow===6)?" wknd":"");
+    if(it.blocked.includes(id))cls+=" blocked";
+    else if(it.preferred.includes(id))cls+=" preferred";
+    e.className=cls; e.textContent=d;
+    e.title=`${d}/${calM} · ${["ראשון","שני","שלישי","רביעי","חמישי","שישי","שבת"][dow]}`;
+    e.onclick=()=>{cycleDay(it,id);};
+    cal.appendChild(e);
+  }
+}
+function cycleDay(it,id){
+  const b=it.blocked.indexOf(id), p=it.preferred.indexOf(id);
+  if(b<0 && p<0){ it.blocked.push(id); }
+  else if(b>=0){ it.blocked.splice(b,1); it.preferred.push(id); }
+  else { it.preferred.splice(p,1); }
+  renderCalendar(it); renderRoster();
+}
+
+/* ---------- events (delegated on editor) ---------- */
+$("#editor").addEventListener("input",e=>{
+  const it=interns.find(x=>x.id===selId); if(!it)return;
+  const f=e.target.dataset.f;
+  if(f){ it[f]= e.target.value; if(f==="name")renderRoster(); }
+});
+$("#editor").addEventListener("change",e=>{
+  const it=interns.find(x=>x.id===selId); if(!it)return;
+  if(e.target.hasAttribute("data-active")){ it.active=e.target.checked; renderRoster(); }
+  if(e.target.dataset.appr){
+    const k=e.target.dataset.appr; it.approved[k]=e.target.checked;
+    if(!it.approved[k]) it.strength[k]="";
+    renderEditor();
+  }
+  if(e.target.id==="calM"){ calM=+e.target.value; renderCalendar(it); }
+  if(e.target.id==="calY"){ calY=+e.target.value; renderCalendar(it); }
+});
+$("#editor").addEventListener("click",e=>{
+  const it=interns.find(x=>x.id===selId); if(!it)return;
+  if(e.target.dataset.st){
+    const k=e.target.dataset.st, v=e.target.dataset.v;
+    if(!it.approved[k])return;
+    it.strength[k]= (it.strength[k]===v)? "" : v;   // click again to clear
+    renderEditor();
+  }
+  if(e.target.id==="delBtn"){
+    if(confirm(`למחוק את ${it.name||it.id}? פעולה זו אינה הפיכה.`)){
+      interns=interns.filter(x=>x.id!==selId);
+      selId = interns.length?interns[0].id:null;
+      renderAll(); toast("המתמחה נמחק");
+    }
+  }
+});
+
+/* ---------- toolbar ---------- */
+$("#addBtn").onclick=()=>{
+  const approved={}, strength={};
+  ST.forEach(([k])=>{approved[k]=(k==="ward"); strength[k]="";});
+  const it={id:nextId(),name:"",active:true,religion:"jewish",preferredStationId:"",notes:"",
+    maxTotalShifts:"",maxFridayShifts:"",maxSaturdayShifts:"",maxWeekendShifts:"",
+    blocked:[],preferred:[],approved,strength};
+  interns.push(it); selId=it.id; renderAll();
+  const nm=$(".ed-head input.name"); if(nm)nm.focus();
+};
+$("#exportBtn").onclick=()=>{
+  const blob=new Blob(["\ufeff"+toCSV()],{type:"text/csv;charset=utf-8"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
+  a.download="interns_edited.csv"; a.click(); URL.revokeObjectURL(a.href);
+  toast("הקובץ יוצא: interns_edited.csv");
+};
+$("#importInput").onchange=e=>{
+  const file=e.target.files[0]; if(!file)return;
+  const r=new FileReader();
+  r.onload=()=>{ try{
+      const rows=parseCSV(r.result); if(!rows.length){toast("לא נמצאו שורות בקובץ");return;}
+      interns=rows.map(fromRow); selId=interns.length?interns[0].id:null;
+      renderAll(); toast(`יובאו ${interns.length} מתמחים`);
+    }catch(err){toast("שגיאה בקריאת הקובץ");}
+  };
+  r.readAsText(file,"utf-8"); e.target.value="";
+};
+$("#search").oninput=e=>{filter=e.target.value; renderRoster();};
+
+function renderAll(){renderRoster();renderEditor();}
+
+/* ---------- external duties ---------- */
+let ext = {};                 // "day|station" -> name
+let extY = 2026, extM = 7;
+function extKey(d,st){return d+"|"+st;}
+function renderExternal(){
+  const t=$("#extTable"); if(!t)return;
+  const ndays=new Date(extY,extM,0).getDate();
+  let html="<thead><tr><th class='daycol'>יום</th>"+ST.map(([,n])=>`<th>${n}</th>`).join("")+"</tr></thead><tbody>";
+  for(let d=1;d<=ndays;d++){
+    const dow=new Date(extY,extM-1,d).getDay();
+    const we=(dow===5||dow===6);
+    html+=`<tr class="${we?'wknd':''}"><td class="daycol">${d} <span style="color:var(--muted);font-weight:400">${HEB_DOW[(dow+6)%7]}</span></td>`;
+    for(const [st] of ST){
+      const v=ext[extKey(d,st)]||"";
+      html+=`<td><input data-d="${d}" data-st="${st}" value="${escapeHtml(v)}" placeholder="—"></td>`;
+    }
+    html+="</tr>";
+  }
+  t.innerHTML=html+"</tbody>";
+  const n=Object.values(ext).filter(Boolean).length;
+  $("#extCount").textContent=`${n} משבצות בכיסוי חוץ`;
+}
+$("#extTable").addEventListener("input",e=>{
+  if(!e.target.dataset.d)return;
+  const k=extKey(+e.target.dataset.d, e.target.dataset.st);
+  const v=e.target.value.trim();
+  if(v) ext[k]=v; else delete ext[k];
+  const n=Object.values(ext).filter(Boolean).length;
+  $("#extCount").textContent=`${n} משבצות בכיסוי חוץ`;
+});
+function loadExtCSV(text){
+  ext={};
+  for(const row of parseCSV(text)){
+    const d=parseInt(String(row.day).trim(),10);
+    const st=(row.station||"").trim();
+    const nm=(row.name||"").trim();
+    if(d && ST.some(([k])=>k===st) && nm) ext[extKey(d,st)]=nm;
+  }
+}
+function extToCSV(){
+  const rows=["day,station,name"];
+  for(const [st] of ST)
+    for(let d=1;d<=31;d++){ const v=ext[extKey(d,st)]; if(v) rows.push(`${d},${st},${esc(v)}`); }
+  rows.sort((a,b)=>a==="day,station,name"?-1:b==="day,station,name"?1: (parseInt(a)-parseInt(b)));
+  return rows.join("\n")+"\n";
+}
+$("#exportExtBtn").onclick=()=>{
+  const blob=new Blob(["\ufeff"+extToCSV()],{type:"text/csv;charset=utf-8"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
+  a.download=`external_${extY}_${String(extM).padStart(2,"0")}.csv`; a.click(); URL.revokeObjectURL(a.href);
+  toast("יוצא קובץ תורני חוץ");
+};
+$("#importExtInput").onchange=e=>{
+  const file=e.target.files[0]; if(!file)return;
+  const r=new FileReader();
+  r.onload=()=>{ try{ loadExtCSV(r.result); renderExternal(); toast("יובאו תורני חוץ"); }
+                 catch(err){ toast("שגיאה בקריאת הקובץ"); } };
+  r.readAsText(file,"utf-8"); e.target.value="";
+};
+$("#extM").onchange=e=>{extM=+e.target.value; renderExternal();};
+$("#extY").onchange=e=>{extY=+e.target.value; renderExternal();};
+
+/* ---------- holidays ---------- */
+let hols = {};                // "YYYY-MM-DD" -> {kind:"eve"|"day", name:""}
+let holY = 2026, holM = 7;
+function renderHolidays(){
+  const cal=$("#holCal"); if(!cal)return;
+  cal.innerHTML="";
+  HEB_DOW.forEach(d=>{const e=document.createElement("div");e.className="dow";e.textContent=d;cal.appendChild(e);});
+  const first=new Date(holY,holM-1,1).getDay(), ndays=new Date(holY,holM,0).getDate();
+  for(let i=0;i<first;i++){const e=document.createElement("div");e.className="day pad";cal.appendChild(e);}
+  for(let d=1;d<=ndays;d++){
+    const id=iso(holY,holM,d), dow=new Date(holY,holM-1,d).getDay();
+    const e=document.createElement("div");
+    let cls="day"+((dow===5||dow===6)?" wknd":"");
+    const h=hols[id]; if(h) cls+=h.kind==="eve"?" holeve":" holday";
+    e.className=cls; e.textContent=d;
+    e.title=`${d}/${holM}`;
+    e.onclick=()=>cycleHol(id);
+    cal.appendChild(e);
+  }
+  // named list
+  const list=$("#holList");
+  const keys=Object.keys(hols).filter(k=>{const [y,m]=k.split("-").map(Number); return y===holY&&m===holM;}).sort();
+  let html="<h3>חגים בחודש זה</h3>";
+  if(!keys.length) html+='<div class="hol-empty">אין חגים מסומנים. לחץ על יום בלוח כדי להוסיף.</div>';
+  for(const k of keys){
+    const h=hols[k], d=+k.split("-")[2];
+    html+=`<div class="hol-row"><span class="date">${d}/${holM}</span>
+      <span class="kind ${h.kind}">${h.kind==="eve"?"ערב חג":"חג"}</span>
+      <input data-holname="${k}" value="${escapeHtml(h.name||"")}" placeholder="שם החג (לא חובה)"></div>`;
+  }
+  list.innerHTML=html;
+}
+function cycleHol(id){
+  const h=hols[id];
+  if(!h) hols[id]={kind:"eve",name:""};
+  else if(h.kind==="eve") h.kind="day";
+  else delete hols[id];
+  renderHolidays();
+}
+$("#holList").addEventListener("input",e=>{
+  const k=e.target.dataset.holname; if(k && hols[k]) hols[k].name=e.target.value;
+});
+function loadHolCSV(text){
+  hols={};
+  for(const row of parseCSV(text)){
+    let dt=(row.date||"").trim(); if(!dt)continue;
+    if(!dt.includes("-")){ const n=parseInt(dt,10); if(n) dt=iso(holY,holM,n); }
+    const kind=((row.kind||"").trim().toLowerCase()==="eve"||(row.kind||"").includes("ערב"))?"eve":"day";
+    hols[dt]={kind, name:(row.name||"").trim()};
+  }
+}
+function holToCSV(){
+  const keys=Object.keys(hols).sort();
+  const rows=["date,kind,name"];
+  for(const k of keys) rows.push(`${k},${hols[k].kind},${esc(hols[k].name||"")}`);
+  return rows.join("\n")+"\n";
+}
+$("#exportHolBtn").onclick=()=>{
+  const blob=new Blob(["\ufeff"+holToCSV()],{type:"text/csv;charset=utf-8"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
+  a.download=`holidays_${holY}_${String(holM).padStart(2,"0")}.csv`; a.click(); URL.revokeObjectURL(a.href);
+  toast("יוצא קובץ חגים");
+};
+$("#importHolInput").onchange=e=>{
+  const file=e.target.files[0]; if(!file)return;
+  const r=new FileReader();
+  r.onload=()=>{ try{ loadHolCSV(r.result); renderHolidays(); toast("יובאו חגים"); }
+                 catch(err){ toast("שגיאה בקריאת הקובץ"); } };
+  r.readAsText(file,"utf-8"); e.target.value="";
+};
+$("#holM").onchange=e=>{holM=+e.target.value; renderHolidays();};
+$("#holY").onchange=e=>{holY=+e.target.value; renderHolidays();};
+
+/* ---------- tabs ---------- */
+function cap(s){return s[0].toUpperCase()+s.slice(1);}
+function showTab(which){
+  for(const t of ["interns","external","holidays","generate"]){
+    $("#view-"+t).hidden = (t!==which);
+    $("#actions"+cap(t)).style.display = (t===which?"contents":"none");
+    $("#tab"+cap(t)).classList.toggle("active", t===which);
+  }
+  $("#count").style.display = which==="interns"?"":"none";
+  if(which==="external") renderExternal();
+  if(which==="holidays") renderHolidays();
+}
+$("#tabInterns").onclick=()=>showTab("interns");
+$("#tabExternal").onclick=()=>showTab("external");
+$("#tabHolidays").onclick=()=>showTab("holidays");
+$("#tabGenerate").onclick=()=>showTab("generate");
+
+/* ---------- generate schedule via backend ---------- */
+const genBackendInput=$("#genBackend");
+const genPasswordInput=$("#genPassword");
+genBackendInput.value=localStorage.getItem("schedulerBackendUrl")||"";
+genPasswordInput.value=localStorage.getItem("schedulerPassword")||"";
+genBackendInput.addEventListener("change",()=>{
+  localStorage.setItem("schedulerBackendUrl", genBackendInput.value.trim());
+});
+genPasswordInput.addEventListener("change",()=>{
+  localStorage.setItem("schedulerPassword", genPasswordInput.value);
+});
+$("#genBtn").onclick=async()=>{
+  const status=$("#genStatus");
+  const backend=genBackendInput.value.trim().replace(/\/+$/,"");
+  const password=genPasswordInput.value;
+  const year=$("#genYear").value.trim(), month=$("#genMonth").value.trim();
+  if(!backend){ status.textContent="נא להזין כתובת שרת."; status.style.color="var(--weak)"; return; }
+  if(!interns.length){ status.textContent="אין נתוני מתמחים לשיבוץ."; status.style.color="var(--weak)"; return; }
+  status.style.color="var(--muted)"; status.textContent="יוצר שיבוץ… זה עשוי לקחת עד דקה.";
+  $("#genBtn").disabled=true;
+  try{
+    const fd=new FormData();
+    fd.append("year", year); fd.append("month", month);
+    fd.append("interns", new Blob(["\ufeff"+toCSV()],{type:"text/csv"}), "interns.csv");
+    if(Object.keys(ext).length) fd.append("external", new Blob(["\ufeff"+extToCSV()],{type:"text/csv"}), "external.csv");
+    if(Object.keys(hols).length) fd.append("holidays", new Blob(["\ufeff"+holToCSV()],{type:"text/csv"}), "holidays.csv");
+    const headers={};
+    if(password) headers["Authorization"]="Basic "+btoa("user:"+password);
+    const res=await fetch(backend+"/generate",{method:"POST", body:fd, headers});
+    if(res.status===401){ throw new Error("סיסמה שגויה או חסרה."); }
+    if(!res.ok){
+      let msg=`שגיאת שרת (${res.status})`;
+      try{ const j=await res.json(); if(j.error) msg=j.error; }catch(e){}
+      throw new Error(msg);
+    }
+    const blob=await res.blob();
+    const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
+    a.download=`schedule_${year}_${String(month).padStart(2,"0")}.xlsx`; a.click(); URL.revokeObjectURL(a.href);
+    status.style.color="var(--strong)"; status.textContent="השיבוץ נוצר והורד בהצלחה.";
+  }catch(err){
+    status.style.color="var(--weak)"; status.textContent="שגיאה: "+err.message;
+  }finally{
+    $("#genBtn").disabled=false;
+  }
+};
+
+/* ---------- boot ---------- */
+function b64ToText(b){const bin=atob(b);const bytes=Uint8Array.from(bin,c=>c.charCodeAt(0));return new TextDecoder("utf-8").decode(bytes);}
+(function init(){
+  try{ interns=parseCSV(b64ToText(SEED_B64)).map(fromRow); }catch(e){ interns=[]; }
+  try{ loadExtCSV(b64ToText(EXT_SEED_B64)); }catch(e){ ext={}; }
+  selId=interns.length?interns[0].id:null;
+  $("#extM").innerHTML=MONTHS.map((m,i)=>`<option value="${i+1}" ${i+1===extM?"selected":""}>${m}</option>`).join("");
+  $("#extY").innerHTML=[2025,2026,2027,2028].map(y=>`<option ${y===extY?"selected":""}>${y}</option>`).join("");
+  $("#holM").innerHTML=MONTHS.map((m,i)=>`<option value="${i+1}" ${i+1===holM?"selected":""}>${m}</option>`).join("");
+  $("#holY").innerHTML=[2025,2026,2027,2028].map(y=>`<option ${y===holY?"selected":""}>${y}</option>`).join("");
+  renderAll();
+})();
+</script>
