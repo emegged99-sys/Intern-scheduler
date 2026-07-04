@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """Web backend for the monthly on-call scheduler.
-Exposes POST /generate which takes the interns CSV (and optional
-holidays/external CSVs) + year/month, runs monthly_scheduler.py, and
-streams back the generated .xlsx file.
+POST /generate → JSON with schedule data + base64 xlsx.
 
 Run locally:   python3 app.py            (http://localhost:5000)
 Run in prod:   gunicorn app:app --timeout 300 --workers 1
 """
+import base64
+import csv
 import hmac
 import os
 import shutil
@@ -14,18 +14,15 @@ import subprocess
 import tempfile
 from functools import wraps
 
-from flask import Flask, request, send_file, jsonify
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)  # allow the editor (hosted on a different domain) to call this API
+CORS(app)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SCHEDULER = os.path.join(BASE_DIR, "monthly_scheduler.py")
 
-# Shared-secret password, set as an env var on the hosting platform (never
-# commit it to git). If APP_PASSWORD is unset, auth is disabled (open access) —
-# useful for local testing, but set it before deploying anywhere public.
 APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
 
 
@@ -76,10 +73,22 @@ def generate():
             holidays_file.save(holidays_path)
             cmd += ["--holidays", holidays_path]
 
+        ext_data = {}
         if external_file is not None and external_file.filename:
             external_path = os.path.join(workdir, "external.csv")
             external_file.save(external_path)
             cmd += ["--external", external_path]
+            # parse external for the response
+            with open(external_path, encoding="utf-8-sig") as ef:
+                for row in csv.DictReader(ef):
+                    try:
+                        d = int(str(row.get("day", "")).strip())
+                    except (ValueError, TypeError):
+                        continue
+                    st = (row.get("station") or "").strip()
+                    nm = (row.get("name") or "").strip()
+                    if st and nm:
+                        ext_data[f"{d}|{st}"] = nm
 
         result = subprocess.run(
             cmd, cwd=workdir, capture_output=True, text=True, timeout=540
@@ -89,12 +98,39 @@ def generate():
             log = (result.stdout or "")[-3000:] + "\n" + (result.stderr or "")[-3000:]
             return jsonify(error="השיבוץ נכשל", log=log), 500
 
-        download_name = f"schedule_{year}_{month.zfill(2)}.xlsx"
-        return send_file(
-            out_path,
-            as_attachment=True,
-            download_name=download_name,
-            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        # read assignments CSV
+        asg_path = out_path.replace(".xlsx", "_assignments.csv")
+        assignments = []
+        if os.path.exists(asg_path):
+            with open(asg_path, encoding="utf-8-sig") as af:
+                for row in csv.DictReader(af):
+                    assignments.append({
+                        "day": int(row["day"]),
+                        "station": row["station"],
+                        "id": row["id"],
+                        "name": row["name"],
+                    })
+
+        # read xlsx as base64
+        with open(out_path, "rb") as xf:
+            xlsx_b64 = base64.b64encode(xf.read()).decode("ascii")
+
+        # parse log for stats
+        log = result.stdout or ""
+        stats_line = ""
+        for line in log.split("\n"):
+            if "filled" in line and "hard-violations" in line:
+                stats_line = line.strip()
+                break
+
+        return jsonify(
+            assignments=assignments,
+            external=ext_data,
+            xlsx=xlsx_b64,
+            year=int(year),
+            month=int(month),
+            stats=stats_line,
+            log=log[-2000:],
         )
     except subprocess.TimeoutExpired:
         return jsonify(error="השיבוץ ארך יותר מדי זמן (timeout)"), 504
