@@ -29,6 +29,7 @@ DAYS  = list(range(1, calendar.monthrange(YEAR, MONTH)[1] + 1))
 HOL_CSV  = _FLAGS.get("holidays")
 BASE_CSV = _FLAGS.get("base")                       # machine-readable existing schedule (mid-month edit)
 FROM_DAY = int(_FLAGS["from"]) if "from" in _FLAGS else None   # re-optimize from this day onward
+LOCKS_CSV = _FLAGS.get("locks")                      # locked slots that must not change
 
 STATIONS = ["er1", "er2", "nicu1", "nicu2", "ward", "picu"]
 PAIRS = [("er1", "er2"), ("nicu1", "nicu2")]
@@ -49,6 +50,19 @@ if EXT_CSV:
             if _st in STATIONS and _nm:
                 EXTERNAL[(_d, _st)] = _nm
 SKIP = set(EXTERNAL.keys())            # (day, station) NOT filled by interns
+
+# ---- locked slots (from --locks): must not change during re-optimization ----
+LOCKED = set()   # (day, station) pairs that are frozen
+if LOCKS_CSV:
+    with open(LOCKS_CSV, encoding="utf-8-sig") as _f:
+        for _row in csv.DictReader(_f):
+            try: _d = int(str(_row.get("day", "")).strip())
+            except (ValueError, TypeError): continue
+            _st = (_row.get("station") or "").strip()
+            if _st in STATIONS and _d in range(1, 32):
+                LOCKED.add((_d, _st))
+    if LOCKED:
+        print(f"  Locked slots: {len(LOCKED)}")
 
 # ---- day classification ----
 def dow(d):  # 4=Fri,5=Sat
@@ -630,7 +644,7 @@ def sa(s, iters=60000, T0=8.0, T1=0.05, keys=None):
     cur = cost(s); best = cur
     best_state = snapshot(s)
     keys = list(SLOTS) if keys is None else list(keys)
-    keys = [k for k in keys if k not in PINNED]   # never move pinned slots
+    keys = [k for k in keys if k not in PINNED and k not in LOCKED]   # never move pinned/locked slots
     for it in range(iters):
         T = T0 * (T1/T0)**(it/iters)
         if random.random() < 0.75:

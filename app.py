@@ -90,6 +90,18 @@ def generate():
                     if st and nm:
                         ext_data[f"{d}|{st}"] = nm
 
+        # mid-month re-optimization: base schedule + locks
+        base_file = request.files.get("base")
+        locks_file = request.files.get("locks")
+        if base_file is not None and base_file.filename:
+            base_path = os.path.join(workdir, "base.csv")
+            base_file.save(base_path)
+            cmd += ["--base", base_path, "--from", "1"]
+        if locks_file is not None and locks_file.filename:
+            locks_path = os.path.join(workdir, "locks.csv")
+            locks_file.save(locks_path)
+            cmd += ["--locks", locks_path]
+
         result = subprocess.run(
             cmd, cwd=workdir, capture_output=True, text=True, timeout=540
         )
