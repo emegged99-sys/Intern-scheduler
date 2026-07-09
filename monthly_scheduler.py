@@ -125,12 +125,15 @@ with open(CSV, encoding="utf-8-sig") as f:
             preferredStation=(r["preferredStationId"].strip() or None),
             notes=r["notes"].strip(),
             maxTotal=fnum(r["maxTotalShifts"]),
+            minTotal=fnum(r.get("minTotalShifts", "")),
             maxFri=fnum(r["maxFridayShifts"]),
             maxSat=fnum(r["maxSaturdayShifts"]),
             maxWeekend=fnum(r["maxWeekendShifts"]),
+            maxSandwiches=fnum(r.get("maxSandwiches", "")),
             blocked=parse_dates(r["blockedDates"]),
             preferred=parse_dates(r["preferredDates"]),
             approved=appr, strength=strg,
+            requests=json.loads(r.get("specialRequests", "").strip() or "[]"),
         )
 
 # special soft flags
@@ -142,6 +145,52 @@ for iid, it in interns.items():
         STATION_PREF[iid] = it["preferredStation"]
 STATION_PREF["intern-17"] = "nicu1"  # מור – הערה: כמה שיותר NICU1
 
+# ---- special requests: per-day station overrides, pins, sandwich limits ----
+# APPROVED_OVERRIDE[(iid, st, d)] = True/False  overrides the base approved flag for that day
+APPROVED_OVERRIDE = {}
+PINNED = {}   # (day, station) -> intern_id
+MAX_SAND = {} # intern_id -> max sandwiches allowed (None = global rule)
+for iid, it in interns.items():
+    if it.get("maxSandwiches") is not None:
+        MAX_SAND[iid] = int(it["maxSandwiches"])
+    for req in it.get("requests", []):
+        rtype = req.get("type", "")
+        if rtype == "pin":
+            d = int(req["day"]); st = req["station"]
+            if d in DAYS and st in STATIONS:
+                PINNED[(d, st)] = iid
+        elif rtype == "station_from":
+            st = req["station"]; fromDay = int(req["fromDay"])
+            for d in DAYS:
+                if d >= fromDay:
+                    APPROVED_OVERRIDE[(iid, st, d)] = True
+                else:
+                    APPROVED_OVERRIDE[(iid, st, d)] = False
+        elif rtype == "station_until":
+            st = req["station"]; untilDay = int(req["untilDay"])
+            for d in DAYS:
+                if d <= untilDay:
+                    APPROVED_OVERRIDE[(iid, st, d)] = False
+        elif rtype == "block_station_range":
+            st = req["station"]
+            fromDay = int(req["fromDay"]); toDay = int(req["toDay"])
+            for d in DAYS:
+                if fromDay <= d <= toDay:
+                    APPROVED_OVERRIDE[(iid, st, d)] = False
+if PINNED:
+    print(f"  Pinned assignments: {len(PINNED)}")
+if APPROVED_OVERRIDE:
+    print(f"  Station overrides: {len(APPROVED_OVERRIDE)} (day,station,intern) entries")
+if MAX_SAND:
+    print(f"  Per-intern sandwich limits: {MAX_SAND}")
+
+def is_approved(i, st, d):
+    """Check if intern i is approved for station st on day d, considering overrides."""
+    key = (i, st, d)
+    if key in APPROVED_OVERRIDE:
+        return APPROVED_OVERRIDE[key]
+    return interns[i]["approved"][st]
+
 IIDS = list(interns.keys())
 print(f"Active interns: {len(IIDS)}")
 for st in STATIONS:
@@ -152,7 +201,10 @@ for st in STATIONS:
 def avail_days(i):
     return [d for d in DAYS if d not in interns[i]["blocked"]]
 def can_any_station(i):
-    return any(interns[i]["approved"][st] for st in STATIONS)
+    if any(interns[i]["approved"][st] for st in STATIONS):
+        return True
+    # check if any override grants approval on any day
+    return any(APPROVED_OVERRIDE.get((i, st, d), False) for st in STATIONS for d in DAYS)
 
 for i in list(interns):
     if not can_any_station(i):
@@ -232,7 +284,7 @@ class State:
 
 def hard_ok(s, i, d, st, ignore_self_day=False):
     it = interns[i]
-    if not it["approved"][st]: return False
+    if not is_approved(i, st, d): return False
     if d in it["blocked"]: return False
     if not ignore_self_day and s.working(i, d): return False
     if (d-1) in s.idays[i] or (d+1) in s.idays[i]: return False
@@ -315,12 +367,19 @@ def greedy_score(s, i, d, st):
     return score
 
 def solve_day(s, d, restarts=40):
-    order_pre = sorted(STATIONS, key=lambda st: len(feasible_candidates(s, d, st, set())))
+    # identify already-placed slots (e.g. pinned) and their interns
+    pre_used = set()
+    for st in STATIONS:
+        if s.assign[(d, st)] is not None:
+            pre_used.add(s.assign[(d, st)])
+    open_stations = [st for st in STATIONS if (d, st) not in SKIP and s.assign[(d, st)] is None]
+    if not open_stations:
+        return {}  # all filled (pins + externals)
+    order_pre = sorted(open_stations, key=lambda st: len(feasible_candidates(s, d, st, pre_used)))
     best = None; best_cost = INF
     for _ in range(restarts):
-        trial = {}; used = set(); ok = True
-        # recompute order dynamically (most-constrained-first)
-        remaining = [st for st in STATIONS if (d, st) not in SKIP]
+        trial = {}; used = set(pre_used); ok = True
+        remaining = list(open_stations)
         while remaining:
             # candidate counts now
             cc = {}
@@ -346,7 +405,7 @@ def solve_day(s, d, restarts=40):
 def hard_ok_trial(s, trial, d, i, st):
     # like hard_ok but partner may be in trial (not yet committed to state)
     it = interns[i]
-    if not it["approved"][st]: return False
+    if not is_approved(i, st, d): return False
     if d in it["blocked"]: return False
     if s.working(i, d): return False
     if (d-1) in s.idays[i] or (d+1) in s.idays[i]: return False
@@ -372,6 +431,11 @@ def greedy_score_trial(s, trial, d, i, st):
 def construct():
     s = State()
     unfilled = []
+    # place pinned assignments first
+    for (d, st), iid in PINNED.items():
+        if (d, st) not in SKIP and iid in IIDS:
+            if not s.working(iid, d):
+                s.place(iid, d, st)
     for d in DAYS:
         res = solve_day(s, d)
         if res is None:
@@ -490,9 +554,12 @@ def count_sandwiches(s):
     for i in IIDS:
         if i in SANDWICH_OK: continue
         ds = s.idays[i]
-        for d in ds:
-            if (d+2) in ds:  # gap of exactly one free day
-                n += 1
+        cnt_i = sum(1 for d in ds if (d+2) in ds)
+        limit = MAX_SAND.get(i)
+        if limit is not None:
+            n += max(0, cnt_i - limit)  # only penalize excess over personal limit
+        else:
+            n += cnt_i
     return n
 
 def spread_penalty(s):
@@ -534,10 +601,17 @@ def cost(s):
     cf = sum((s.cnt[i]["fri"]   - FAIR_FRI[i])**2  for i in IIDS)
     cs = sum((s.cnt[i]["sat"]   - FAIR_SAT[i])**2  for i in IIDS)
     peak = sum(max(0, s.cnt[i]["total"] - PEAK_THR)**2 for i in IIDS)
+    # minTotal: heavy penalty for being below the floor
+    mintot = sum(max(0, int(interns[i]["minTotal"]) - s.cnt[i]["total"])**2
+                 for i in IIDS if interns[i].get("minTotal") is not None)
+    # pinned violations: heavy penalty for pins not honored
+    pinv = sum(1 for (d, st), iid in PINNED.items()
+               if (d, st) not in SKIP and s.assign.get((d, st)) != iid)
     return (W["total"]*ct + W["wknd"]*cw + W["fri"]*cf + W["sat"]*cs
             + W["sand"]*count_sandwiches(s) + W["pref"]*pref_penalty(s)
             + W["spread"]*spread_penalty(s) + W["stpref"]*stpref_penalty(s)
-            + W["early"]*early_penalty(s) + PEAK_W*peak + STAB_W*stab_penalty(s))
+            + W["early"]*early_penalty(s) + PEAK_W*peak + STAB_W*stab_penalty(s)
+            + 50.0*mintot + 100.0*pinv)
 
 # =========================================================
 #                 SIMULATED ANNEALING
@@ -556,6 +630,7 @@ def sa(s, iters=60000, T0=8.0, T1=0.05, keys=None):
     cur = cost(s); best = cur
     best_state = snapshot(s)
     keys = list(SLOTS) if keys is None else list(keys)
+    keys = [k for k in keys if k not in PINNED]   # never move pinned slots
     for it in range(iters):
         T = T0 * (T1/T0)**(it/iters)
         if random.random() < 0.75:
@@ -629,7 +704,7 @@ def validate(s):
         for d in ds:
             if not fut(d): continue
             for st in STATIONS:
-                if s.assign[(d, st)] == i and not it["approved"][st]:
+                if s.assign[(d, st)] == i and not is_approved(i, st, d):
                     errs.append(f"{it['name']} unapproved {st} d{d}")
             if d in it["blocked"]:
                 errs.append(f"{it['name']} blocked day {d}")
@@ -644,12 +719,18 @@ def validate(s):
         c = s.cnt[i]
         if it["maxTotal"] is not None and c["total"] > it["maxTotal"]:
             errs.append(f"{it['name']} total {c['total']}>{it['maxTotal']}")
+        if it["minTotal"] is not None and c["total"] < int(it["minTotal"]):
+            errs.append(f"{it['name']} total {c['total']}<min {int(it['minTotal'])}")
         if it["maxFri"] is not None and c["fri"] > it["maxFri"]:
             errs.append(f"{it['name']} fri {c['fri']}>{it['maxFri']}")
         if it["maxSat"] is not None and c["sat"] > it["maxSat"]:
             errs.append(f"{it['name']} sat {c['sat']}>{it['maxSat']}")
         if it["maxWeekend"] is not None and c["wknd"] > it["maxWeekend"]:
             errs.append(f"{it['name']} wknd {c['wknd']}>{it['maxWeekend']}")
+    # pinned assignments
+    for (d, st), iid in PINNED.items():
+        if (d, st) not in SKIP and fut(d) and s.assign.get((d, st)) != iid:
+            errs.append(f"pin {interns[iid]['name']} not at {st} d{d}")
     # pair strength
     for d in DAYS:
         if not fut(d): continue
