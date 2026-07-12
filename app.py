@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
 """Web backend for the monthly on-call scheduler.
 POST /generate → JSON with schedule data + base64 xlsx.
+GET/POST /api/state/<key> → persistent file-based storage for editor state.
 
 Run locally:   python3 app.py            (http://localhost:5000)
-Run in prod:   gunicorn app:app --timeout 300 --workers 1
+Run in prod:   gunicorn app:app --timeout 600 --workers 1
 """
 import base64
 import csv
 import hmac
+import json
 import os
 import shutil
 import subprocess
@@ -22,8 +24,12 @@ CORS(app)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SCHEDULER = os.path.join(BASE_DIR, "monthly_scheduler.py")
+DATA_DIR = os.path.join(BASE_DIR, "data")
+os.makedirs(DATA_DIR, exist_ok=True)
 
 APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
+
+ALLOWED_KEYS = {"interns", "external", "holidays"}
 
 
 def require_auth(view):
@@ -44,6 +50,31 @@ def require_auth(view):
 @app.get("/health")
 def health():
     return jsonify(status="ok")
+
+
+# ---- file-based state storage ----
+@app.get("/api/state/<key>")
+@require_auth
+def get_state(key):
+    if key not in ALLOWED_KEYS:
+        return jsonify(error="Invalid key"), 400
+    path = os.path.join(DATA_DIR, f"{key}.json")
+    if not os.path.exists(path):
+        return jsonify(data=None)
+    with open(path, encoding="utf-8") as f:
+        return jsonify(data=json.load(f))
+
+
+@app.post("/api/state/<key>")
+@require_auth
+def save_state(key):
+    if key not in ALLOWED_KEYS:
+        return jsonify(error="Invalid key"), 400
+    data = request.get_json()
+    path = os.path.join(DATA_DIR, f"{key}.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False)
+    return jsonify(ok=True)
 
 
 @app.post("/generate")
@@ -78,7 +109,6 @@ def generate():
             external_path = os.path.join(workdir, "external.csv")
             external_file.save(external_path)
             cmd += ["--external", external_path]
-            # parse external for the response
             with open(external_path, encoding="utf-8-sig") as ef:
                 for row in csv.DictReader(ef):
                     try:
