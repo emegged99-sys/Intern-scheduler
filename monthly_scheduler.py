@@ -69,6 +69,7 @@ def dow(d):  # 4=Fri,5=Sat
     return datetime.date(YEAR, MONTH, d).weekday()
 IS_FRI = {d: dow(d) == 4 for d in DAYS}
 IS_SAT = {d: dow(d) == 5 for d in DAYS}
+IS_THU = {d: dow(d) == 3 for d in DAYS}
 
 # ---- holidays (behave like weekends): eve == Friday, holiday == Saturday ----
 # --holidays FILE : CSV with columns date,kind[,name].  date = day-of-month or YYYY-MM-DD.
@@ -270,7 +271,7 @@ class State:
     def __init__(s):
         s.assign = {(d, st): None for d in DAYS for st in STATIONS}
         s.idays = {i: set() for i in IIDS}            # days intern works
-        s.cnt = {i: dict(total=0, fri=0, sat=0, wknd=0, wday=0,
+        s.cnt = {i: dict(total=0, thu=0, fri=0, sat=0, wknd=0, wday=0,
                          st={k: 0 for k in STATIONS}) for i in IIDS}
 
     def working(s, i, d):
@@ -280,6 +281,7 @@ class State:
         s.assign[(d, st)] = i
         s.idays[i].add(d)
         c = s.cnt[i]; c["total"] += 1; c["st"][st] += 1
+        if IS_THU[d]: c["thu"] += 1
         if IS_FRI[d]: c["fri"] += 1
         if IS_SAT[d]: c["sat"] += 1
         if IS_WEEKEND[d]: c["wknd"] += 1
@@ -291,6 +293,7 @@ class State:
         s.assign[(d, st)] = None
         s.idays[i].discard(d)
         c = s.cnt[i]; c["total"] -= 1; c["st"][st] -= 1
+        if IS_THU[d]: c["thu"] -= 1
         if IS_FRI[d]: c["fri"] -= 1
         if IS_SAT[d]: c["sat"] -= 1
         if IS_WEEKEND[d]: c["wknd"] -= 1
@@ -360,6 +363,7 @@ def greedy_score(s, i, d, st):
         score += c["wknd"] * 8
     if IS_FRI[d]: score += c["fri"] * 4
     if IS_SAT[d]: score += c["sat"] * 6
+    if IS_THU[d]: score += c["thu"] * 4
     # preferred dates -> bonus
     if d in it["preferred"]: score -= 25
     # station preference
@@ -532,6 +536,7 @@ def construct_midmonth(base):
 WK_DAYS  = [d for d in DAYS if IS_WEEKEND[d]]
 FRI_DAYS = [d for d in DAYS if IS_FRI[d]]
 SAT_DAYS = [d for d in DAYS if IS_SAT[d]]
+THU_DAYS = [d for d in DAYS if IS_THU[d]]
 
 def cat_cap(i, days, maxk):
     av = [d for d in days if d not in interns[i]["blocked"]]
@@ -542,11 +547,13 @@ def cat_cap(i, days, maxk):
 CAP_WK  = {i: cat_cap(i, WK_DAYS,  interns[i]["maxWeekend"]) for i in IIDS}
 CAP_FRI = {i: cat_cap(i, FRI_DAYS, interns[i]["maxFri"])      for i in IIDS}
 CAP_SAT = {i: cat_cap(i, SAT_DAYS, interns[i]["maxSat"])      for i in IIDS}
+CAP_THU = {i: cat_cap(i, THU_DAYS, None)                      for i in IIDS}
 FAIR_WK  = water_fill(CAP_WK,  sum(1 for d in WK_DAYS  for st in STATIONS if (d, st) not in SKIP))
 FAIR_FRI = water_fill(CAP_FRI, sum(1 for d in FRI_DAYS for st in STATIONS if (d, st) not in SKIP))
 FAIR_SAT = water_fill(CAP_SAT, sum(1 for d in SAT_DAYS for st in STATIONS if (d, st) not in SKIP))
+FAIR_THU = water_fill(CAP_THU, sum(1 for d in THU_DAYS for st in STATIONS if (d, st) not in SKIP))
 
-W = dict(total=2.0, wknd=2.0, fri=1.5, sat=1.5, sand=9.0, pref=6.0,
+W = dict(total=2.0, wknd=2.0, fri=1.5, sat=1.5, thu=1.5, sand=9.0, pref=6.0,
          spread=0.5, stpref=2.0, early=3.0)
 # Peak-load smoothing: penalize anyone whose total exceeds PEAK_THR, quadratically.
 # PEAK_THR auto-adapts to "one above the rounded mean load", so it tightens
@@ -614,6 +621,7 @@ def cost(s):
     cw = sum((s.cnt[i]["wknd"]  - FAIR_WK[i])**2   for i in IIDS)
     cf = sum((s.cnt[i]["fri"]   - FAIR_FRI[i])**2  for i in IIDS)
     cs = sum((s.cnt[i]["sat"]   - FAIR_SAT[i])**2  for i in IIDS)
+    ch = sum((s.cnt[i]["thu"]   - FAIR_THU[i])**2  for i in IIDS)
     peak = sum(max(0, s.cnt[i]["total"] - PEAK_THR)**2 for i in IIDS)
     # minTotal: heavy penalty for being below the floor
     mintot = sum(max(0, int(interns[i]["minTotal"]) - s.cnt[i]["total"])**2
@@ -621,7 +629,7 @@ def cost(s):
     # pinned violations: heavy penalty for pins not honored
     pinv = sum(1 for (d, st), iid in PINNED.items()
                if (d, st) not in SKIP and s.assign.get((d, st)) != iid)
-    return (W["total"]*ct + W["wknd"]*cw + W["fri"]*cf + W["sat"]*cs
+    return (W["total"]*ct + W["wknd"]*cw + W["fri"]*cf + W["sat"]*cs + W["thu"]*ch
             + W["sand"]*count_sandwiches(s) + W["pref"]*pref_penalty(s)
             + W["spread"]*spread_penalty(s) + W["stpref"]*stpref_penalty(s)
             + W["early"]*early_penalty(s) + PEAK_W*peak + STAB_W*stab_penalty(s)
