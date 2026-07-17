@@ -258,6 +258,52 @@ def water_fill(cap_map, total):
                 target[i] = cap_map[i]; remaining -= give; pool.discard(i)
     return target
 FAIR_TOTAL = water_fill(CAP, TOTAL_SLOTS)
+# ---- per-station feasibility check (surfaces bottlenecks) ----
+STATION_HEB = {"er1": "מיון 1", "er2": "מיון 2", "nicu1": "פגיה 1",
+               "nicu2": "פגיה 2", "ward": "מחלקה", "picu": 'טיפ"נ'}
+station_shortages = []
+for st in STATIONS:
+    needed = sum(1 for d in DAYS if (d, st) not in SKIP)
+    # count how many "intern-days" are theoretically approved+available for this station
+    supply = 0
+    for i in IIDS:
+        for d in DAYS:
+            if d in interns[i]["blocked"]:
+                continue
+            if APPROVED_OVERRIDE.get((i, st, d), interns[i]["approved"][st]):
+                supply += 1
+    # each intern can work at most alt_cap days total → this is an approximation
+    pool_size = sum(1 for i in IIDS if interns[i]["approved"][st] or
+                    any(APPROVED_OVERRIDE.get((i, st, d), False) for d in DAYS))
+    if pool_size < 2:
+        station_shortages.append(f"{STATION_HEB[st]}: רק {pool_size} מתמחים מאושרים לתחנה (צריך לפחות 2 ליום)")
+    elif needed > 0 and supply < needed * 3:  # need generous buffer since interns can't work every day
+        station_shortages.append(f"{STATION_HEB[st]}: פחות מדי מתמחים זמינים ({pool_size} מתמחים, צריך למלא {needed} ימים)")
+
+if station_shortages:
+    print("DIAG_SHORTAGE_START")
+    for msg in station_shortages:
+        print("DIAG:", msg)
+    print("DIAG_SHORTAGE_END")
+
+# ---- total capacity vs demand ----
+if sum(CAP.values()) < TOTAL_SLOTS:
+    print("DIAG_CAPACITY:", f"סך הקיבולת של המתמחים ({sum(CAP.values())}) קטן מהמשבצות למילוי ({TOTAL_SLOTS})")
+
+# ---- interns with no approvals ----
+no_approval = [interns[i]["name"] for i in IIDS if not can_any_station(i)]
+if no_approval:
+    print("DIAG_NO_APPROVAL:", "מתמחים ללא אישור לאף תחנה: " + ", ".join(no_approval))
+
+# ---- interns almost fully blocked ----
+heavily_blocked = []
+for i in IIDS:
+    avail = len(avail_days(i))
+    if avail < 3:
+        heavily_blocked.append(f"{interns[i]['name']} (רק {avail} ימים זמינים)")
+if heavily_blocked:
+    print("DIAG_BLOCKED:", "מתמחים עם מעט מאוד ימים זמינים: " + ", ".join(heavily_blocked))
+
 print("Sum cap=", sum(CAP.values()), "need=", TOTAL_SLOTS)
 
 print(json.dumps({"caps_sample": {interns[i]['name']: CAP[i] for i in IIDS}}, ensure_ascii=False))
@@ -1058,6 +1104,24 @@ def main():
           % (filled, TOTAL_SLOTS, len(errs), count_sandwiches(s), pref_penalty(s)))
     for e in errs[:20]:
         print("  VIOLATION:", e)
+
+    # aggregate empty-slot diagnostics
+    empty_by_station = {}
+    empty_days = {}
+    for e in errs:
+        if e.startswith("EMPTY"):
+            parts = e.split()
+            if len(parts) >= 3:
+                d, st = parts[1], parts[2]
+                empty_by_station[st] = empty_by_station.get(st, 0) + 1
+                empty_days.setdefault(st, []).append(d)
+    if empty_by_station:
+        print("DIAG_EMPTY_START")
+        for st, cnt in sorted(empty_by_station.items(), key=lambda x: -x[1]):
+            days_str = ", ".join(empty_days[st][:10])
+            more = f" (וכן {len(empty_days[st]) - 10} ימים נוספים)" if len(empty_days[st]) > 10 else ""
+            print(f"DIAG: לא הצליח למלא {cnt} משבצות ב{STATION_HEB.get(st, st)} - ימים: {days_str}{more}")
+        print("DIAG_EMPTY_END")
 
     # changes vs base (mid-month)
     changed = []

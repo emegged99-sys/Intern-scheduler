@@ -136,9 +136,44 @@ def generate():
             cmd, cwd=workdir, capture_output=True, text=True, timeout=540
         )
 
-        if result.returncode != 0 or not os.path.exists(out_path):
-            log = (result.stdout or "")[-3000:] + "\n" + (result.stderr or "")[-3000:]
-            return jsonify(error="השיבוץ נכשל", log=log), 500
+        # parse diagnostics from stdout
+        stdout = result.stdout or ""
+        diagnostics = []
+        in_shortage = False
+        in_empty = False
+        for line in stdout.split("\n"):
+            line = line.strip()
+            if line == "DIAG_SHORTAGE_START":
+                in_shortage = True; continue
+            if line == "DIAG_SHORTAGE_END":
+                in_shortage = False; continue
+            if line == "DIAG_EMPTY_START":
+                in_empty = True; continue
+            if line == "DIAG_EMPTY_END":
+                in_empty = False; continue
+            if line.startswith("DIAG:") and (in_shortage or in_empty):
+                diagnostics.append(line[len("DIAG:"):].strip())
+            elif line.startswith("DIAG_CAPACITY:"):
+                diagnostics.append(line[len("DIAG_CAPACITY:"):].strip())
+            elif line.startswith("DIAG_NO_APPROVAL:"):
+                diagnostics.append(line[len("DIAG_NO_APPROVAL:"):].strip())
+            elif line.startswith("DIAG_BLOCKED:"):
+                diagnostics.append(line[len("DIAG_BLOCKED:"):].strip())
+
+        # detect failure: process crashed, or produced empty slots, or hard violations
+        has_hard_failure = (result.returncode != 0 or not os.path.exists(out_path))
+        has_empty_slots = "EMPTY" in stdout and "VIOLATION: EMPTY" in stdout
+
+        if has_hard_failure or has_empty_slots:
+            log = stdout[-3000:] + "\n" + (result.stderr or "")[-3000:]
+            if diagnostics:
+                reason = " · ".join(diagnostics)
+                err_msg = f"השיבוץ נכשל: {reason}"
+            elif has_empty_slots:
+                err_msg = "השיבוץ נכשל: לא ניתן היה למלא את כל המשבצות בהינתן האילוצים"
+            else:
+                err_msg = "השיבוץ נכשל"
+            return jsonify(error=err_msg, diagnostics=diagnostics, log=log), 500
 
         # read assignments CSV
         asg_path = out_path.replace(".xlsx", "_assignments.csv")
