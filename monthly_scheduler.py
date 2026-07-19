@@ -34,6 +34,10 @@ LOCKS_CSV = _FLAGS.get("locks")                      # locked slots that must no
 STATIONS = ["er1", "er2", "nicu1", "nicu2", "ward", "picu"]
 PAIRS = [("er1", "er2"), ("nicu1", "nicu2")]
 PAIR_OF = {"er1": "er2", "er2": "er1", "nicu1": "nicu2", "nicu2": "nicu1"}
+# Asymmetric pair rule: only the "master" of each pair drives the constraint.
+# If master is weak (strength 1), the slave must be strong (strength 3).
+# If slave is weak, no constraint on master.
+PAIR_MASTER = {"er1", "nicu1"}   # er1 and nicu1 are the "senior" stations
 
 # ---- external (non-intern) duties ----
 # --external FILE  (or 5th positional): CSV day,station,name. Those station-days are
@@ -376,11 +380,23 @@ def hard_ok(s, i, d, st, ignore_self_day=False):
     return True
 
 def pair_strength_ok(i, st, j, pst):
-    si = interns[i]["strength"][st]; sj = interns[j]["strength"][pst]
-    if si is None or sj is None: return True
-    # hard rule: a weak(1) must be paired only with a strong(3)
-    if si == 1 and sj != 3: return False
-    if sj == 1 and si != 3: return False
+    """Asymmetric pair rule: only the MASTER station drives the constraint.
+    If the master's occupant is weak (str=1), the slave must be strong (str=3).
+    Weak on the slave side has no effect on the master side.
+    """
+    # figure out which of (st, pst) is master
+    if st in PAIR_MASTER:
+        master_i, master_st = i, st
+        slave_i, slave_st = j, pst
+    elif pst in PAIR_MASTER:
+        master_i, master_st = j, pst
+        slave_i, slave_st = i, st
+    else:
+        return True  # neither is master (shouldn't happen with current pairs)
+    sm = interns[master_i]["strength"][master_st]
+    ss = interns[slave_i]["strength"][slave_st]
+    if sm is None or ss is None: return True
+    if sm == 1 and ss != 3: return False
     return True
 
 # ---- cross-station constraint: PICU <-> ER1 ----
