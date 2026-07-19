@@ -164,9 +164,28 @@ def generate():
         has_hard_failure = (result.returncode != 0 or not os.path.exists(out_path))
         has_empty_slots = "EMPTY" in stdout and "VIOLATION: EMPTY" in stdout
 
+        # if the scheduler crashed with a Python exception, extract the exception line
+        stderr = result.stderr or ""
+        combined = stdout + "\n" + stderr
+        crash_msg = None
+        if has_hard_failure:
+            # find last exception line (e.g. "KeyError: 'intern-12'")
+            for line in reversed(combined.split("\n")):
+                line = line.strip()
+                if not line:
+                    continue
+                # typical Python exception line: "ExceptionType: message"
+                if ":" in line and not line.startswith(("File ", " ", "~")):
+                    parts = line.split(":", 1)
+                    if parts[0].strip() and parts[0].strip()[0].isupper() and "Error" in parts[0]:
+                        crash_msg = line
+                        break
+
         if has_hard_failure or has_empty_slots:
-            log = stdout[-3000:] + "\n" + (result.stderr or "")[-3000:]
-            if diagnostics:
+            log = stdout[-3000:] + "\n" + stderr[-3000:]
+            if crash_msg:
+                err_msg = f"תקלה בסקדולר: {crash_msg}"
+            elif diagnostics:
                 reason = " · ".join(diagnostics)
                 err_msg = f"השיבוץ נכשל: {reason}"
             elif has_empty_slots:

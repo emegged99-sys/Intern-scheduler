@@ -151,20 +151,19 @@ with open(CSV, encoding="utf-8-sig") as f:
             requests=json.loads(r.get("specialRequests", "").strip() or "[]"),
         )
 
-# special soft flags
-SANDWICH_OK = {"intern-5"}           # ליהי
-EARLY_PREF  = {"intern-12"}          # ישי – רוב התורנויות ב-3 שבועות ראשונים
+# station preference: from preferredStationId field per intern
 STATION_PREF = {}                    # intern -> station soft-bonus
 for iid, it in interns.items():
     if it["preferredStation"]:
         STATION_PREF[iid] = it["preferredStation"]
-STATION_PREF["intern-17"] = "nicu1"  # מור – הערה: כמה שיותר NICU1
 
 # ---- special requests: per-day station overrides, pins, sandwich limits ----
 # APPROVED_OVERRIDE[(iid, st, d)] = True/False  overrides the base approved flag for that day
 APPROVED_OVERRIDE = {}
 PINNED = {}   # (day, station) -> intern_id
 MAX_SAND = {} # intern_id -> max sandwiches allowed (None = global rule)
+EARLY_PREF = set()   # interns preferring early-month shifts
+LATE_PREF  = set()   # interns preferring late-month shifts
 for iid, it in interns.items():
     if it.get("maxSandwiches") is not None:
         MAX_SAND[iid] = int(it["maxSandwiches"])
@@ -192,12 +191,20 @@ for iid, it in interns.items():
             for d in DAYS:
                 if fromDay <= d <= toDay:
                     APPROVED_OVERRIDE[(iid, st, d)] = False
+        elif rtype == "early_month":
+            EARLY_PREF.add(iid)
+        elif rtype == "late_month":
+            LATE_PREF.add(iid)
 if PINNED:
     print(f"  Pinned assignments: {len(PINNED)}")
 if APPROVED_OVERRIDE:
     print(f"  Station overrides: {len(APPROVED_OVERRIDE)} (day,station,intern) entries")
 if MAX_SAND:
     print(f"  Per-intern sandwich limits: {MAX_SAND}")
+if EARLY_PREF:
+    print(f"  Early-month preference: {EARLY_PREF}")
+if LATE_PREF:
+    print(f"  Late-month preference: {LATE_PREF}")
 
 def is_approved(i, st, d):
     """Check if intern i is approved for station st on day d, considering overrides."""
@@ -414,15 +421,16 @@ def greedy_score(s, i, d, st):
     if d in it["preferred"]: score -= 25
     # station preference
     if STATION_PREF.get(i) == st: score -= 8
-    # sandwich avoidance (unless allowed)
-    if i not in SANDWICH_OK and ((d-2) in s.idays[i] or (d+2) in s.idays[i]):
+    # sandwich avoidance (per-intern limit via MAX_SAND handled in count_sandwiches)
+    if (d-2) in s.idays[i] or (d+2) in s.idays[i]:
         score += 12
     # spacing: encourage gaps; penalty if close to last shift
     if s.idays[i]:
         nearest = min(abs(d-x) for x in s.idays[i])
         if nearest <= 3: score += (4 - nearest) * 2
-    # early-month preference for intern-12
+    # early-month / late-month preference (from special requests)
     if i in EARLY_PREF and d > 21: score += 15
+    if i in LATE_PREF and d < 11: score += 15
     # prefer using scarce picu/er1 people elsewhere sparingly:
     # discourage spending er1/picu-eligible "core" people on ward
     if st == "ward" and (interns[i]["approved"]["picu"] or interns[i]["approved"]["er1"]):
@@ -619,7 +627,6 @@ def stab_penalty(s):
 def count_sandwiches(s):
     n = 0
     for i in IIDS:
-        if i in SANDWICH_OK: continue
         ds = s.idays[i]
         cnt_i = sum(1 for d in ds if (d+2) in ds)
         limit = MAX_SAND.get(i)
@@ -659,7 +666,11 @@ def stpref_penalty(s):
 def early_penalty(s):
     p = 0
     for i in EARLY_PREF:
-        p += sum(1 for d in s.idays[i] if d > 21)
+        if i in s.idays:
+            p += sum(1 for d in s.idays[i] if d > 21)
+    for i in LATE_PREF:
+        if i in s.idays:
+            p += sum(1 for d in s.idays[i] if d < 11)
     return p
 
 def cost(s):
