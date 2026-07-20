@@ -870,7 +870,9 @@ def BUILD(assign, order, name_of, notes_lines=None):
     # Sheet 1: לוח חודשי
     # =========================================================
     ws=wb.active; ws.title="לוח חודשי"; ws.sheet_view.rightToLeft=True
-    ws["A1"]="לוח תורנויות – יולי 2026"; ws["A1"].font=font(True,16,NAVY)
+    HEB_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"]
+    _month_name = HEB_MONTHS[MONTH-1]
+    ws["A1"]=f"לוח תורנויות – {_month_name} {YEAR}"; ws["A1"].font=font(True,16,NAVY)
     ws.merge_cells("A1:H1")
     ws["A2"]=(f"{len(STATIONS)} עמדות × {len(DAYS)} ימים = {len(DAYS)*len(STATIONS)} שיבוצים"
               + (f"  ·  {len(SKIP)} בכיסוי תורני חוץ  ·  {TOTAL_SLOTS} למתמחים" if SKIP else "")
@@ -882,7 +884,7 @@ def BUILD(assign, order, name_of, notes_lines=None):
         c.alignment=center; c.border=border
     for d in DAYS:
         rr=4+d
-        a=ws.cell(rr,1,f"{d}/7"); a.alignment=center; a.font=font(IS_WK[d],10)
+        a=ws.cell(rr,1,f"{d}/{MONTH}"); a.alignment=center; a.font=font(IS_WK[d],10)
         b=ws.cell(rr,2,DOWH[dow(d)]); b.alignment=center; b.font=font(IS_WK[d],10)
         for j,st in enumerate(STATIONS,3):
             if (d,st) in EXTERNAL:
@@ -917,14 +919,14 @@ def BUILD(assign, order, name_of, notes_lines=None):
     m.cell(3,1,"מתמחה").font=font(True,10,"FFFFFF"); m.cell(3,1).fill=fill(BLUE); m.cell(3,1).alignment=center; m.cell(3,1).border=border
     for d in DAYS:
         c=m.cell(3,1+d,d); c.font=font(True,9,"FFFFFF"); c.fill=fill(BLUE if not IS_WK[d] else "C55A11"); c.alignment=center; c.border=border
-    flagrows=[("שישי?",IS_FRI),("שבת?",IS_SAT),('סופ"ש?',IS_WK)]
+    flagrows=[("חמישי?",IS_THU),("שישי?",IS_FRI),("שבת?",IS_SAT),('סופ"ש?',IS_WK)]
     for k,(lab,fl) in enumerate(flagrows):
         r=4+k
         c=m.cell(r,1,lab); c.font=font(True,8,"555555"); c.alignment=right; c.fill=fill(GREY); c.border=border
         for d in DAYS:
             cc=m.cell(r,1+d,1 if fl[d] else 0); cc.font=font(False,8,"AAAAAA"); cc.alignment=center; cc.border=border; cc.fill=fill(GREY)
-    FLAG_FRI_ROW,FLAG_SAT_ROW,FLAG_WK_ROW=4,5,6
-    first_intern_row=7
+    FLAG_THU_ROW,FLAG_FRI_ROW,FLAG_SAT_ROW,FLAG_WK_ROW=4,5,6,7
+    first_intern_row=8
     for idx,iid in enumerate(order):
         r=first_intern_row+idx
         nc=m.cell(r,1,name_of[iid]); nc.font=font(True,9); nc.alignment=right; nc.border=border
@@ -942,7 +944,7 @@ def BUILD(assign, order, name_of, notes_lines=None):
                 c.fill=fill("EDEDED")
     m.column_dimensions["A"].width=12
     for d in DAYS: m.column_dimensions[get_column_letter(1+d)].width=6.5
-    m.freeze_panes="B7"
+    m.freeze_panes="B8"
     last_intern_row=first_intern_row+len(order)-1
 
     # =========================================================
@@ -950,8 +952,8 @@ def BUILD(assign, order, name_of, notes_lines=None):
     # =========================================================
     g=wb.create_sheet("סיכום והוגנות"); g.sheet_view.rightToLeft=True
     g["A1"]="סיכום עומסים והוגנות"; g["A1"].font=font(True,14,NAVY)
-    g.merge_cells("A1:M1")
-    cols=["מתמחה","סה""כ","חול","שישי","שבת","סופ""ש","מיון1","מיון2","פגיה1","פגיה2","מחלקה",'טיפ"נ',"תקרות (סהכ/ו/ש/סופ)"]
+    g.merge_cells("A1:N1")
+    cols=["מתמחה","סה""כ","חול","חמישי","שישי","שבת","סופ""ש","מיון1","מיון2","פגיה1","פגיה2","מחלקה",'טיפ"נ',"תקרות (סהכ/ו/ש/סופ)"]
     for j,h in enumerate(cols,1):
         c=g.cell(3,j,h); c.font=font(True,10,"FFFFFF"); c.fill=fill(BLUE); c.alignment=center; c.border=border
     MROW="'מטריצת מתמחה'!"
@@ -961,39 +963,40 @@ def BUILD(assign, order, name_of, notes_lines=None):
         g.cell(gr,1,name_of[iid]).font=font(True,10); g.cell(gr,1).alignment=right
         rng=f"{MROW}B{mr}:AF{mr}"
         g.cell(gr,2,f'=COUNTA({rng})')                                   # total
-        g.cell(gr,4,f'=SUMPRODUCT(({rng}<>"")*({MROW}B$4:AF$4))')        # fri
-        g.cell(gr,5,f'=SUMPRODUCT(({rng}<>"")*({MROW}B$5:AF$5))')        # sat
-        g.cell(gr,6,f'=SUMPRODUCT(({rng}<>"")*({MROW}B$6:AF$6))')        # weekend
-        g.cell(gr,3,f'=B{gr}-F{gr}')                                     # weekday
+        g.cell(gr,4,f'=SUMPRODUCT(({rng}<>"")*({MROW}B$4:AF$4))')        # thu (row 4)
+        g.cell(gr,5,f'=SUMPRODUCT(({rng}<>"")*({MROW}B$5:AF$5))')        # fri (row 5)
+        g.cell(gr,6,f'=SUMPRODUCT(({rng}<>"")*({MROW}B$6:AF$6))')        # sat (row 6)
+        g.cell(gr,7,f'=SUMPRODUCT(({rng}<>"")*({MROW}B$7:AF$7))')        # weekend (row 7)
+        g.cell(gr,3,f'=B{gr}-G{gr}')                                     # weekday = total - weekend
         for k,st in enumerate(STATIONS):                                  # per-station
             lab=SLAB[st].replace('"','""')
-            g.cell(gr,7+k,f'=COUNTIF({rng},"{lab}")')
+            g.cell(gr,8+k,f'=COUNTIF({rng},"{lab}")')
         it=interns[iid]
         def cap(v): return "—" if v is None else int(v)
-        g.cell(gr,13,f"{cap(it['maxTotal'])} / {cap(it['maxFri'])} / {cap(it['maxSat'])} / {cap(it['maxWeekend'])}")
-        g.cell(gr,13).font=font(False,9,"777777"); g.cell(gr,13).alignment=center
-        for j in range(2,13):
+        g.cell(gr,14,f"{cap(it['maxTotal'])} / {cap(it['maxFri'])} / {cap(it['maxSat'])} / {cap(it['maxWeekend'])}")
+        g.cell(gr,14).font=font(False,9,"777777"); g.cell(gr,14).alignment=center
+        for j in range(2,14):
             g.cell(gr,j).alignment=center; g.cell(gr,j).font=font(False,10); g.cell(gr,j).border=border
         g.cell(gr,1).border=border
         if any(interns[iid][k] is not None for k in("maxTotal","maxFri","maxSat","maxWeekend")):
-            g.cell(gr,13).fill=fill(YEL)
+            g.cell(gr,14).fill=fill(YEL)
     nrow=4+len(order)
     # stats rows
     stat_labels=[("מינימום","MIN"),("מקסימום","MAX"),("ממוצע","AVERAGE"),("סטיית תקן","STDEV")]
     for s_i,(lab,fn) in enumerate(stat_labels):
         rr=nrow+1+s_i
         c=g.cell(rr,1,lab); c.font=font(True,10,NAVY); c.alignment=right; c.fill=fill(LBLUE); c.border=border
-        for j in range(2,7):
+        for j in range(2,8):
             col=get_column_letter(j)
             cc=g.cell(rr,j,f'={fn}({col}4:{col}{nrow-0})')
             cc.alignment=center; cc.font=font(True,10,NAVY); cc.fill=fill(LBLUE); cc.border=border
             if fn=="AVERAGE" or fn=="STDEV": cc.number_format="0.0"
-    for j in range(1,14):
+    for j in range(1,15):
         pass
     g.column_dimensions["A"].width=12
-    for col in "BCDEF": g.column_dimensions[col].width=7
-    for col in "GHIJKL": g.column_dimensions[col].width=7
-    g.column_dimensions["M"].width=18
+    for col in "BCDEFG": g.column_dimensions[col].width=7
+    for col in "HIJKLM": g.column_dimensions[col].width=7
+    g.column_dimensions["N"].width=18
     g.freeze_panes="B4"
 
     # =========================================================
@@ -1002,22 +1005,7 @@ def BUILD(assign, order, name_of, notes_lines=None):
     n=wb.create_sheet("הנחות והערות"); n.sheet_view.rightToLeft=True
     n["A1"]="הנחות, מתודולוגיה והערות"; n["A1"].font=font(True,14,NAVY); n.merge_cells("A1:B1")
     lines = notes_lines if notes_lines is not None else [
-     ("מטרה","שיבוץ 6 עמדות בכל יום ביולי 2026 (186 שיבוצים), מיטוב ללא פגיעה באילוצים קשיחים."),
-     ("מתמחים פעילים","26 (אביעד, אריאל, ברית מסומנים active=false וכל ימיהם חסומים – הוצאו)."),
-     ("עמדות","מיון1, מיון2 (צמד) · פגיה1, פגיה2 (צמד) · מחלקה · טיפ\"נ."),
-     ("אילוץ צמד (קשיח)","אם בעמדת צמד אחת משובץ חלש (חוזק 1) – בשנייה חייב חזק (חוזק 3). אומת: 0 הפרות."),
-     ("ללא רצף","אין שיבוץ ביומיים רצופים; אין יותר מעמדה אחת ביום. אומת: 0 הפרות."),
-     ("חסימות","ימים חסומים לכל מתמחה כובדו במלואם. אומת: 0 הפרות."),
-     ("תקרות","maxTotal / maxFriday / maxSaturday / maxWeekend כובדו במלואם. אומת: 0 הפרות."),
-     ("סוף שבוע","שישי+שבת לכולם. אין חגים יהודיים/מוסלמיים ביולי 2026 שמתנהגים כסוף-שבוע (תשעה באב הוא צום, לא טופל כסופ\"ש)."),
-     ("סנדוויץ' (רך)","שאיפה להימנע מהפרש יום (עבודה-מנוחה-עבודה). בפתרון: 0 סנדוויצ'ים (ליהי פטורה לפי הערה)."),
-     ("ימים מועדפים (רך)","17 מתוך 20 בקשות כובדו. לא כובדו: יוכבד 17/7, שרית 8/7, רז 13/7 – נמנעו ע\"י אילוצים קשיחים (רצף/צמד/תקרה)."),
-     ("העדפת תחנה (רך)","אביה ומור → פגיה1 (רוב התורנויות); עלי → מיון2 (כל התורנויות)."),
-     ("ישי (רך)","רוב התורנויות ב-3 השבועות הראשונים (6 מתוך 7; אחת ב-24/7)."),
-     ("הוגנות","יעדים מאוזנים בשיטת water-filling יחסית לזמינות ולתקרות. רוב המתמחים 6–9 תורנויות; הנמוכים כבולים בתקרה/זמינות (אפרת 5, מוחמד נתשה 3, ליהי 7)."),
-     ("יוכבד – הערה","ההערה ('mid-month ER1...') לא נאכפה כי מיון1/מיון2 אינם מאושרים לה בנתונים (approved=0); שובצה בפגיה/מחלקה לפי האישורים."),
-     ("שיטה","בנייה חמדנית מוגבלת-אילוצים + חיפוש מקומי (Simulated Annealing), 6 התחלות, נבחר הפתרון התקין בעל העלות הנמוכה."),
-     ("אימות","כל האילוצים הקשיחים נבדקו תוכניתית – 0 הפרות; כל 186 המשבצות מאוישות."),
+     ("שים לב","פרטי השיבוץ מופיעים בטאבים האחרים."),
     ]
     for i,(k,v) in enumerate(lines,3):
         a=n.cell(i,1,k); a.font=font(True,10,BLUE); a.alignment=Alignment(horizontal="right",vertical="top")
@@ -1206,7 +1194,7 @@ def main():
      ("חסימות", f"ימים חסומים לכל מתמחה כובדו במלואם. אומת: {vstr}."),
      ("תקרות", f"maxTotal / maxFriday / maxSaturday / maxWeekend כובדו במלואם. אומת: {vstr}."),
      ("סוף שבוע", "שישי+שבת לכולם. ערב חג מתנהג כשישי והחג כשבת."),
-     ("סנדוויץ' (רך)", f"שאיפה להימנע מהפרש יום (עבודה-מנוחה-עבודה). בפתרון: {n_sand} סנדוויצ'ים (ליהי פטורה לפי הערה)."),
+     ("סנדוויץ' (רך)", f"שאיפה להימנע מהפרש יום (עבודה-מנוחה-עבודה). בפתרון: {n_sand} סנדוויצ'ים."),
      ("ימים מועדפים (רך)", miss_txt),
      ("העדפת תחנה (רך)", "מתמחים עם preferredStationId / הערת-תחנה תועדפו לשבץ בתחנתם (פירוט מספרי בגיליון 'סיכום והוגנות')."),
      ("הוגנות", f"יעדים מאוזנים בשיטת water-filling + קנס על עומס מעל {PEAK_THR} כדי לרסן חריגים. מספרים בפועל לכל מתמחה בגיליון 'סיכום והוגנות'."),
