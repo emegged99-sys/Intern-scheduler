@@ -132,6 +132,12 @@ def generate():
             locks_file.save(locks_path)
             cmd += ["--locks", locks_path]
 
+        # constraint relaxations
+        if request.form.get("relax_pair") == "1":
+            cmd += ["--relax-pair", "1"]
+        if request.form.get("relax_cross") == "1":
+            cmd += ["--relax-cross", "1"]
+
         result = subprocess.run(
             cmd, cwd=workdir, capture_output=True, text=True, timeout=540
         )

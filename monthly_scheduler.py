@@ -30,6 +30,8 @@ HOL_CSV  = _FLAGS.get("holidays")
 BASE_CSV = _FLAGS.get("base")                       # machine-readable existing schedule (mid-month edit)
 FROM_DAY = int(_FLAGS["from"]) if "from" in _FLAGS else None   # re-optimize from this day onward
 LOCKS_CSV = _FLAGS.get("locks")                      # locked slots that must not change
+RELAX_PAIR = _FLAGS.get("relax-pair") == "1"         # pair strength: soft instead of hard
+RELAX_CROSS = _FLAGS.get("relax-cross") == "1"       # PICU→ER1 cross rule: soft instead of hard
 
 STATIONS = ["er1", "er2", "nicu1", "nicu2", "ward", "picu"]
 PAIRS = [("er1", "er2"), ("nicu1", "nicu2")]
@@ -382,9 +384,9 @@ def hard_ok(s, i, d, st, ignore_self_day=False):
 def pair_strength_ok(i, st, j, pst):
     """Asymmetric pair rule: only the MASTER station drives the constraint.
     If the master's occupant is weak (str=1), the slave must be strong (str=3).
+    When RELAX_PAIR is on: strength 2 also passes as sufficient (soft penalty in cost).
     Weak on the slave side has no effect on the master side.
     """
-    # figure out which of (st, pst) is master
     if st in PAIR_MASTER:
         master_i, master_st = i, st
         slave_i, slave_st = j, pst
@@ -392,11 +394,16 @@ def pair_strength_ok(i, st, j, pst):
         master_i, master_st = j, pst
         slave_i, slave_st = i, st
     else:
-        return True  # neither is master (shouldn't happen with current pairs)
+        return True
     sm = interns[master_i]["strength"][master_st]
     ss = interns[slave_i]["strength"][slave_st]
     if sm is None or ss is None: return True
-    if sm == 1 and ss != 3: return False
+    if sm == 1:
+        if RELAX_PAIR:
+            # accept 2 or 3 as slave (soft penalty on 2 handled elsewhere)
+            if ss < 2: return False
+        else:
+            if ss != 3: return False
     return True
 
 # ---- cross-station constraint: PICU <-> ER1 ----
@@ -409,7 +416,11 @@ def cross_strength_ok(pic, er):
     if pic is None or er is None: return True
     sp = interns[pic]["strength"]["picu"]
     se = interns[er]["strength"]["er1"]
-    if sp == 1 and se != 3: return False
+    if sp == 1:
+        if RELAX_CROSS:
+            if se is not None and se < 2: return False
+        else:
+            if se != 3: return False
     if not CROSS_DIRECTIONAL and se == 1 and sp != 3: return False
     return True
 
@@ -689,6 +700,33 @@ def early_penalty(s):
             p += sum(1 for d in s.idays[i] if d < 11)
     return p
 
+def relax_soft_penalty(s):
+    """Count 'relaxed' pairings — where a weak master is paired with a str-2
+    slave under the relaxed rule. Each such pairing gets a soft penalty so the
+    scheduler still prefers proper strength-3 pairings when available.
+    """
+    n = 0
+    if RELAX_PAIR:
+        for d in DAYS:
+            for master, slave in [("er1", "er2"), ("nicu1", "nicu2")]:
+                i = s.assign.get((d, master))
+                j = s.assign.get((d, slave))
+                if i is None or j is None: continue
+                sm = interns[i]["strength"][master]
+                ss = interns[j]["strength"][slave]
+                if sm == 1 and ss == 2:
+                    n += 1
+    if RELAX_CROSS:
+        for d in DAYS:
+            pic = s.assign.get((d, "picu"))
+            er = s.assign.get((d, "er1"))
+            if pic is None or er is None: continue
+            sp = interns[pic]["strength"]["picu"]
+            se = interns[er]["strength"]["er1"]
+            if sp == 1 and se == 2:
+                n += 1
+    return n
+
 def cost(s):
     ct = sum((s.cnt[i]["total"] - FAIR_TOTAL[i])**2 for i in IIDS)
     cw = sum((s.cnt[i]["wknd"]  - FAIR_WK[i])**2   for i in IIDS)
@@ -706,7 +744,7 @@ def cost(s):
             + W["sand"]*count_sandwiches(s) + W["pref"]*pref_penalty(s)
             + W["spread"]*spread_penalty(s) + W["stpref"]*stpref_penalty(s)
             + W["early"]*early_penalty(s) + PEAK_W*peak + STAB_W*stab_penalty(s)
-            + 50.0*mintot + 100.0*pinv)
+            + 50.0*mintot + 100.0*pinv + 20.0*relax_soft_penalty(s))
 
 # =========================================================
 #                 SIMULATED ANNEALING
@@ -1066,6 +1104,11 @@ def BUILD(assign, order, name_of, notes_lines=None):
         ca.column_dimensions[col].width = w
     ca.freeze_panes = "D5"
 
+    # Force Excel to recalculate all formulas on first open
+    # (openpyxl doesn't cache computed values, so without this the sheet
+    # appears empty until the user clicks a formula cell)
+    wb.calculation.calcMode = "auto"
+    wb.calculation.fullCalcOnLoad = True
     wb.save(OUT)
 
 
@@ -1188,8 +1231,13 @@ def main():
      ("חגים", hol_txt),
      ("מתמחים פעילים", f"{len(IIDS)} (מתמחים עם active=false הוצאו מהשיבוץ)."),
      ("עמדות", "מיון1, מיון2 (צמד) · פגיה1, פגיה2 (צמד) · מחלקה · טיפ\"נ."),
-     ("אילוץ צמד (קשיח)", f"אם בעמדת צמד אחת משובץ חלש (חוזק 1) – בשנייה חייב חזק (חוזק 3). אומת: {vstr}."),
-     ("אילוץ טיפ\"נ⟵מיון1 (קשיח)", cross_txt),
+     ("אילוץ צמד" + (" (הורפה)" if RELAX_PAIR else " (קשיח)"),
+      ("אילוץ הורפה: אם בעמדת צמד אחת משובץ חלש (חוזק 1) – בשנייה מספיק חוזק 2. הופיע " +
+       f"{sum(1 for d in DAYS for a,b in [('er1','er2'),('nicu1','nicu2')] if s.assign.get((d,a)) and s.assign.get((d,b)) and interns[s.assign[(d,a)]]['strength'][a]==1 and interns[s.assign[(d,b)]]['strength'][b]==2)} פעמים בפועל."
+       if RELAX_PAIR else
+       f"אם בעמדת צמד אחת משובץ חלש (חוזק 1) – בשנייה חייב חזק (חוזק 3). אומת: {vstr}.")),
+     ("אילוץ טיפ\"נ⟵מיון1" + (" (הורפה)" if RELAX_CROSS else " (קשיח)"),
+      ("אילוץ הורפה: אם טיפ\"נ חלש – במיון 1 מספיק חוזק 2." if RELAX_CROSS else cross_txt)),
      ("ללא רצף", f"אין שיבוץ ביומיים רצופים; אין יותר מעמדה אחת ביום. אומת: {vstr}."),
      ("חסימות", f"ימים חסומים לכל מתמחה כובדו במלואם. אומת: {vstr}."),
      ("תקרות", f"maxTotal / maxFriday / maxSaturday / maxWeekend כובדו במלואם. אומת: {vstr}."),
