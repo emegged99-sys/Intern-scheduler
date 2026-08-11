@@ -164,6 +164,15 @@ def require_auth(view):
     return wrapped
 
 
+@app.get("/editor")
+@app.get("/intern_editor.html")
+def editor():
+    """Serve the admin editor from the backend too. It still works as a
+    standalone file (and on Netlify), but served from here it is reachable from
+    any machine on the network and needs no server address typed in."""
+    return send_from_directory(BASE_DIR, "intern_editor.html")
+
+
 @app.get("/")
 def root():
     """A bare backend root used to 404, which looks broken to anyone who opens
@@ -211,9 +220,10 @@ def root():
 
   <div class="card">
     <h2>מנהל</h2>
-    <p>מסך המנהל הוא הקובץ <code>intern_editor.html</code>, שנפתח בדפדפן בנפרד.
-       בלשונית «יצירת שיבוץ» הזינו תחת «כתובת השרת»:</p>
-    <code>{base}</code>
+    <p>עריכת מתמחים, תורני חוץ, חגים, יצירת שיבוץ, ארכיון והקפאה.</p>
+    <a class="go" href="/editor">פתיחת מסך המנהל ←</a>
+    <p style="margin:12px 0 0">אפשר גם לפתוח את הקובץ <code>intern_editor.html</code>
+       ישירות; במקרה כזה הזינו תחת «כתובת השרת»: <code>{base}</code></p>
   </div>
 
   <div class="card">

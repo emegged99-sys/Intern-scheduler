@@ -792,7 +792,11 @@ function _authHeaders(){
   return h;
 }
 function _backend(){
-  return (localStorage.getItem("schedulerBackendUrl")||"").trim().replace(/\/+$/,"");
+  const saved=(localStorage.getItem("schedulerBackendUrl")||"").trim().replace(/\/+$/,"");
+  if(saved) return saved;
+  // Served by the backend itself? Then it is the backend — nothing to type in.
+  if(location.protocol==="http:"||location.protocol==="https:") return location.origin;
+  return "";
 }
 
 async function _fetchServerState(){

@@ -137,6 +137,14 @@ def main():
     check("it links to the portal", "/portal/" in body)
     check("it shows the address to paste into the editor", "intern_editor.html" in body)
     check("it lists the archive", "חודשים בארכיון" in body)
+    check("it links to the editor", "/editor" in body)
+
+    r = c.get("/editor")
+    check("editor served by the backend", r.status_code == 200)
+    check("and it is the real editor", "עורך נתוני שיבוץ" in r.data.decode())
+    check("legacy filename also works", c.get("/intern_editor.html").status_code == 200)
+    check("editor defaults to its own origin when served",
+          "location.origin" in js)
 
     print("\n[portal is reachable from the same origin]")
     r = c.get("/portal/")
