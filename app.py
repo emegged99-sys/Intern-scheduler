@@ -164,6 +164,66 @@ def require_auth(view):
     return wrapped
 
 
+@app.get("/")
+def root():
+    """A bare backend root used to 404, which looks broken to anyone who opens
+    the address in a browser. Say what this is and where to go instead."""
+    base = request.url_root.rstrip("/")
+    months = store.list_months()
+    cur = current_ym()
+    rows = "".join(
+        f"<tr><td>{ym_label(m['ym'])}</td>"
+        f"<td>{'🔒 מוקפא' if m['status'] == 'frozen' else 'טיוטה'}</td>"
+        f"<td>{m['interns']}</td><td>{m['assigned'] or '—'}</td></tr>"
+        for m in months[:6])
+    return f"""<!doctype html><html lang="he" dir="rtl"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>שרת השיבוץ</title>
+<style>
+ body{{margin:0;background:#F0F3F8;color:#14213A;font-size:15px;line-height:1.55;
+   font-family:"Segoe UI",system-ui,Arial,"Noto Sans Hebrew",sans-serif}}
+ .wrap{{max-width:620px;margin:0 auto;padding:40px 20px}}
+ h1{{font-size:22px;color:#1F3864;margin:0 0 4px}}
+ .sub{{color:#5A6577;font-size:13.5px;margin:0 0 26px}}
+ .card{{background:#fff;border:1px solid #DCE3EE;border-radius:12px;padding:18px 20px;
+   margin-bottom:14px;box-shadow:0 1px 2px rgba(31,56,100,.06),0 8px 24px rgba(31,56,100,.06)}}
+ .card h2{{margin:0 0 6px;font-size:16px;color:#1F3864}}
+ .card p{{margin:0 0 12px;color:#5A6577;font-size:13.5px}}
+ a.go{{display:inline-block;background:#2E5496;color:#fff;text-decoration:none;
+   font-weight:600;padding:9px 18px;border-radius:9px}}
+ code{{background:#E7ECF6;color:#1F3864;padding:3px 9px;border-radius:6px;
+   font-family:ui-monospace,Consolas,monospace;font-size:13.5px;direction:ltr;display:inline-block}}
+ table{{width:100%;border-collapse:collapse;font-size:13.5px}}
+ th{{text-align:right;font-size:11.5px;color:#5A6577;padding:5px 6px;border-bottom:1px solid #DCE3EE}}
+ td{{padding:6px;border-bottom:1px solid #F0F3F8}}
+ .ok{{color:#548235;font-weight:600}}
+</style>
+<div class="wrap">
+  <h1>שרת השיבוץ</h1>
+  <p class="sub">השרת פועל <span class="ok">✓</span> · בסיס נתונים: {store.engine_label().split(' · ')[0]}
+     · חודש נוכחי: {ym_label(cur)}</p>
+
+  <div class="card">
+    <h2>מתמחים</h2>
+    <p>כניסה עם הקוד האישי לצפייה בתורנויות ולעדכון תאריכים.</p>
+    <a class="go" href="/portal/">כניסה למסך שלי ←</a>
+  </div>
+
+  <div class="card">
+    <h2>מנהל</h2>
+    <p>מסך המנהל הוא הקובץ <code>intern_editor.html</code>, שנפתח בדפדפן בנפרד.
+       בלשונית «יצירת שיבוץ» הזינו תחת «כתובת השרת»:</p>
+    <code>{base}</code>
+  </div>
+
+  <div class="card">
+    <h2>חודשים בארכיון</h2>
+    {"<table><tr><th>חודש</th><th>מצב</th><th>מתמחים</th><th>משבצות</th></tr>" + rows + "</table>"
+      if months else "<p style='margin:0'>עדיין אין חודשים.</p>"}
+  </div>
+</div></html>"""
+
+
 @app.get("/health")
 def health():
     return jsonify(status="ok")

@@ -130,6 +130,14 @@ def main():
     check("workbook downloads from the archive",
           base64.b64decode(r["xlsx"]) == b"PK\x03\x04zz")
 
+    print("\n[landing page]")
+    r = c.get("/")
+    check("root serves a page, not a 404", r.status_code == 200)
+    body = r.data.decode()
+    check("it links to the portal", "/portal/" in body)
+    check("it shows the address to paste into the editor", "intern_editor.html" in body)
+    check("it lists the archive", "חודשים בארכיון" in body)
+
     print("\n[portal is reachable from the same origin]")
     r = c.get("/portal/")
     check("portal page served", r.status_code == 200 and b"code" in r.data)
