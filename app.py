@@ -655,4 +655,16 @@ def portal_dates(ym):
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
+    print("\n" + "=" * 64)
+    print("  שרת השיבוץ פועל")
+    print("=" * 64)
+    print(f"  מסך מתמחה   : http://localhost:{port}/portal/")
+    print(f"  כתובת לעורך : http://localhost:{port}")
+    print(f"                (להזין בלשונית 'יצירת שיבוץ' תחת 'כתובת השרת')")
+    print(f"  בסיס נתונים : {store.engine_label()}")
+    if not APP_PASSWORD:
+        print("\n  ⚠  APP_PASSWORD לא הוגדר — ה-API פתוח לכל דורש.")
+        print("     להרצה מקומית זה בסדר; לפני פריסה חובה להגדיר.")
+    print("\n  לעצירה: Ctrl+C")
+    print("=" * 64 + "\n")
     app.run(host="0.0.0.0", port=port, debug=False)
