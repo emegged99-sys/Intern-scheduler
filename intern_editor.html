@@ -215,7 +215,11 @@
     <button class="tab" id="tabHolidays">חגים</button>
     <button class="tab" id="tabGenerate">יצירת שיבוץ</button>
     <button class="tab" id="tabResults" style="display:none">תוצאות</button>
+    <button class="tab" id="tabMonths">חודשים</button>
   </div>
+  <span id="monthChip" title="החודש שנערך כעת"
+        style="font-size:12px;font-weight:700;padding:4px 12px;border-radius:20px;
+               background:#16294d;color:#cfe0ff;margin-inline-start:10px;white-space:nowrap"></span>
   <span class="count" id="count"></span>
   <button class="btn ghost" id="backupBtn" title="גיבוי כל הנתונים לקובץ" style="margin-inline-start:8px">💾 גיבוי</button>
   <label class="btn ghost" for="restoreInput" title="שחזור נתונים מקובץ גיבוי">📂 שחזור</label>
@@ -229,6 +233,10 @@
     <label class="btn ghost" for="importSelectionsInput">ייבוא בחירות</label>
     <input type="file" id="importSelectionsInput" accept=".xlsx,.xls">
     <button class="btn primary" id="exportBtn">ייצוא CSV</button>
+  </span>
+  <span id="actionsMonths" style="display:none">
+    <button class="btn ghost" id="newMonthBtn">+ חודש חדש</button>
+    <button class="btn primary" id="freezeBtn">🔒 הקפאת השיבוץ</button>
   </span>
   <span id="actionsExternal" style="display:none">
     <label class="btn ghost" for="importExtInput">ייבוא CSV</label>
@@ -276,6 +284,17 @@
   <div class="ext-intro">לחיצה על יום מסמנת אותו: רגיל ← ערב חג ← חג ← רגיל. ערב חג מתנהג כשישי והחג כשבת לצורכי איזון סופי־שבוע ותקרות. אפשר להוסיף שם לכל חג ברשימה למטה. הייצוא יוצר <code>holidays_&lt;חודש&gt;.csv</code>.</div>
   <div class="cal" id="holCal" style="max-width:560px"></div>
   <div class="hol-list" id="holList"></div>
+</div>
+
+<div class="view ext-wrap" id="view-months" hidden>
+  <div class="ext-intro">
+    כל חודש נשמר בשלמותו — המתמחים, תורני החוץ, החגים והשיבוץ עצמו. חודש שהוקפא
+    נשמר כפי שפורסם ואפשר לחזור אליו בכל עת בלי להריץ מחדש. חודש חדש יורש את
+    רשימת המתמחים והאישורים, ומתחיל עם לוח ריק — הימים החסומים והמועדפים נאספים
+    מחדש מהמתמחים במסך שלהם.
+  </div>
+  <div id="monthsBox"></div>
+  <div id="codesBox" style="margin-top:26px"></div>
 </div>
 
 <div class="view ext-wrap" id="view-generate" hidden>
@@ -1033,7 +1052,7 @@ $("#holY").onchange=e=>{holY=+e.target.value; renderHolidays();};
 /* ---------- tabs ---------- */
 function cap(s){return s[0].toUpperCase()+s.slice(1);}
 function showTab(which){
-  for(const t of ["interns","external","holidays","generate","results"]){
+  for(const t of ["interns","external","holidays","generate","results","months"]){
     $("#view-"+t).hidden = (t!==which);
     $("#actions"+cap(t)).style.display = (t===which?"contents":"none");
     $("#tab"+cap(t)).classList.toggle("active", t===which);
@@ -1041,12 +1060,14 @@ function showTab(which){
   $("#count").style.display = which==="interns"?"":"none";
   if(which==="external") renderExternal();
   if(which==="holidays") renderHolidays();
+  if(which==="months") renderMonths();
 }
 $("#tabInterns").onclick=()=>showTab("interns");
 $("#tabExternal").onclick=()=>showTab("external");
 $("#tabHolidays").onclick=()=>showTab("holidays");
 $("#tabGenerate").onclick=()=>showTab("generate");
 $("#tabResults").onclick=()=>showTab("results");
+$("#tabMonths").onclick=()=>showTab("months");
 
 /* ---------- generate schedule via backend ---------- */
 const genBackendInput=$("#genBackend");
@@ -1342,6 +1363,7 @@ $("#reoptBtn").onclick = async()=>{
     if(data.error) throw new Error(data.error);
     hideGenLoading();
     renderResults(data);
+    archiveResult(data);
     toast("השיבוץ עודכן בהצלחה");
   }catch(err){
     hideGenLoading();
@@ -1395,6 +1417,8 @@ function hideGenLoading(){
 }
 
 $("#genBtn").onclick=async()=>{
+  if(isFrozen() && !confirm("החודש "+ymLabel(CUR_YM)+" מוקפא.\n\n"+
+      "אפשר להריץ, אבל התוצאה לא תישמר לארכיון ולא תפורסם עד שתבטלו את ההקפאה.\nלהמשיך?")) return;
   const status=$("#genStatus");
   const backend=genBackendInput.value.trim().replace(/\/+$/,"");
   const password=genPasswordInput.value;
@@ -1433,6 +1457,7 @@ $("#genBtn").onclick=async()=>{
     hideGenLoading();
     status.style.color="var(--strong)"; status.textContent="השיבוץ נוצר בהצלחה — עובר ללשונית תוצאות.";
     renderResults(data);
+    archiveResult(data);
   }catch(err){
     hideGenLoading();
     status.style.color="var(--weak)";
@@ -1714,6 +1739,177 @@ async function tryLoadFromServer(){
   return false;
 }
 
+
+/* ================= months: archive, freeze, access codes ================= */
+let MONTH_LIST=[], CUR_YM=null, CUR_STATUS="draft";   // MONTHS is already the month names
+const ymLabel = ym => { const [y,m]=ym.split("-").map(Number); return MONTHS[m-1]+" "+y; };
+const isFrozen = () => CUR_STATUS==="frozen";
+
+async function srvApi(path, opts={}){
+  const backend=_backend();
+  if(!backend) throw new Error("לא הוגדרה כתובת שרת (לשונית \"יצירת שיבוץ\")");
+  const headers=_authHeaders();
+  const r=await fetch(backend+path,{...opts,headers,
+    body:opts.body?JSON.stringify(opts.body):undefined});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(j.error||("שגיאה "+r.status));
+  return j;
+}
+
+function paintMonthChip(){
+  const chip=$("#monthChip"); if(!chip) return;
+  if(!CUR_YM){ chip.textContent=""; chip.style.display="none"; return; }
+  chip.style.display="";
+  chip.textContent = ymLabel(CUR_YM) + (isFrozen()?" · 🔒 מוקפא":"");
+  chip.style.background = isFrozen()?"#5a4b16":"#16294d";
+  chip.style.color = isFrozen()?"#ffe9a8":"#cfe0ff";
+  const fb=$("#freezeBtn");
+  if(fb) fb.textContent = isFrozen()?"ביטול הקפאה":"🔒 הקפאת השיבוץ";
+}
+
+async function refreshMonths(){
+  const j=await srvApi("/api/months");
+  MONTH_LIST=j.months; CUR_YM=j.current;
+  const cur=MONTH_LIST.find(m=>m.ym===CUR_YM);
+  CUR_STATUS=cur?cur.status:"draft";
+  paintMonthChip();
+  return j;
+}
+
+function renderMonths(){
+  const box=$("#monthsBox");
+  box.innerHTML=`<div class="card"><p style="color:var(--muted)">טוען…</p></div>`;
+  refreshMonths().then(()=>{
+    box.innerHTML = `<table class="ext" style="max-width:920px">
+      <thead><tr><th class="daycol">חודש</th><th>מצב</th><th>מתמחים</th><th>משבצות</th>
+        <th>עודכן</th><th>פעולות</th></tr></thead><tbody>
+      ${MONTH_LIST.map(m=>`<tr${m.ym===CUR_YM?' style="background:#eef3fb"':''}>
+        <td class="daycol">${ymLabel(m.ym)}${m.ym===CUR_YM?' <span style="color:var(--blue)">(נערך)</span>':''}</td>
+        <td>${m.status==="frozen"
+              ?'<span style="background:#EFEFEF;color:#1F3864;font-weight:700;padding:2px 10px;border-radius:20px">🔒 מוקפא</span>'
+              :'<span style="background:#E7ECF6;color:#2E5496;font-weight:700;padding:2px 10px;border-radius:20px">טיוטה</span>'}</td>
+        <td>${m.interns}</td>
+        <td>${m.assigned||"—"}</td>
+        <td style="font-size:12px;color:var(--muted)">${m.updatedAt||""}</td>
+        <td>
+          ${m.ym===CUR_YM?"":`<button class="btn" data-sel="${m.ym}" style="padding:4px 10px;font-size:12px">עריכה</button>`}
+          ${m.assigned?`<button class="btn" data-open="${m.ym}" style="padding:4px 10px;font-size:12px">צפייה בשיבוץ</button>`:""}
+          ${m.hasXlsx?`<button class="btn" data-xlsx="${m.ym}" style="padding:4px 10px;font-size:12px">אקסל</button>`:""}
+        </td></tr>`).join("")}
+      </tbody></table>`;
+    box.querySelectorAll("[data-sel]").forEach(b=>b.onclick=()=>selectMonth(b.dataset.sel));
+    box.querySelectorAll("[data-open]").forEach(b=>b.onclick=()=>openArchived(b.dataset.open));
+    box.querySelectorAll("[data-xlsx]").forEach(b=>b.onclick=()=>downloadArchivedXlsx(b.dataset.xlsx));
+    renderCodes();
+  }).catch(e=>{
+    box.innerHTML=`<div class="card"><p style="color:var(--weak)">${escapeHtml(e.message)}</p></div>`;
+  });
+}
+
+async function selectMonth(ym){
+  if(_savingToServer && !confirm("שמירה עדיין רצה. לעבור בכל זאת?")) return;
+  await srvApi("/api/months/"+ym+"/select",{method:"POST"});
+  const st=await loadFromServer();
+  interns=st.interns; ext=st.ext; hols=st.hols;
+  selId=interns.length?interns[0].id:null;
+  await refreshMonths();
+  renderRoster(); renderEditor(); renderMonths();
+  toast("עברת לחודש "+ymLabel(ym));
+}
+
+async function openArchived(ym){
+  const j=await srvApi("/api/months/"+ym);
+  const m=j.month;
+  if(!m.assignment.length){ toast("אין שיבוץ שמור לחודש הזה"); return; }
+  const [y,mo]=ym.split("-").map(Number);
+  renderResults({assignments:m.assignment, external:m.external||{},
+                 year:y, month:mo, stats:m.stats||"", xlsx:null}, true);
+  toast("מוצג שיבוץ שמור — "+ymLabel(ym));
+}
+
+async function downloadArchivedXlsx(ym){
+  const j=await srvApi("/api/months/"+ym+"/xlsx");
+  const bin=atob(j.xlsx), arr=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob([arr],
+    {type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}));
+  a.download=j.filename||("schedule_"+ym+".xlsx"); a.click(); URL.revokeObjectURL(a.href);
+}
+
+async function renderCodes(){
+  const box=$("#codesBox");
+  try{
+    const j=await srvApi("/api/codes");
+    box.innerHTML=`<div class="card" style="max-width:920px">
+      <h3 style="margin:0 0 6px">קודי גישה למתמחים</h3>
+      <p style="margin:0 0 12px;color:var(--muted);font-size:13px">
+        כל מתמחה נכנס למסך שלו בכתובת <code>${escapeHtml(_backend()||"")}/portal/</code>
+        עם הקוד האישי. הקוד קבוע ומלווה אותו מחודש לחודש.</p>
+      <table class="ext"><thead><tr><th class="daycol">מתמחה</th><th>קוד</th><th></th></tr></thead>
+      <tbody>${j.codes.map(c=>`<tr>
+        <td class="daycol">${escapeHtml(c.name||c.intern_id)}</td>
+        <td style="font-family:monospace;font-size:15px;font-weight:700;letter-spacing:2px">${escapeHtml(c.code)}</td>
+        <td><button class="btn" data-rc="${escapeHtml(c.intern_id)}" style="padding:4px 10px;font-size:12px">קוד חדש</button></td>
+      </tr>`).join("")}</tbody></table></div>`;
+    box.querySelectorAll("[data-rc]").forEach(b=>b.onclick=async()=>{
+      if(!confirm("להנפיק קוד חדש? הקוד הקודם יפסיק לעבוד.")) return;
+      await srvApi("/api/codes/"+b.dataset.rc+"/reset",{method:"POST"});
+      toast("הונפק קוד חדש"); renderCodes();
+    });
+  }catch(e){ box.innerHTML=""; }
+}
+
+$("#newMonthBtn").onclick=async()=>{
+  const d=new Date(); d.setMonth(d.getMonth()+1);
+  const def=d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");
+  const ym=prompt("איזה חודש ליצור? (YYYY-MM)", def);
+  if(!ym) return;
+  if(!/^\d{4}-\d{2}$/.test(ym)){ toast("פורמט לא תקין",true); return; }
+  const src = MONTH_LIST.length && confirm(
+    "לבסס על "+ymLabel(CUR_YM)+"?\n\nהמתמחים, האישורים, החוזקים והתקרות יועתקו.\n"+
+    "הימים החסומים והמועדפים יתחילו ריקים.") ? CUR_YM : null;
+  try{
+    await srvApi("/api/months",{method:"POST",body:{ym, sourceYm:src,
+      copyExternal: src?confirm("להעתיק גם את תורני החוץ?"):false,
+      copyHolidays: src?confirm("להעתיק גם את החגים?"):false}});
+    await selectMonth(ym);
+    renderMonths();
+  }catch(e){ toast(e.message,true); }
+};
+
+$("#freezeBtn").onclick=async()=>{
+  if(!CUR_YM){ toast("אין חודש נבחר",true); return; }
+  if(isFrozen()){
+    if(!confirm("לבטל את ההקפאה של "+ymLabel(CUR_YM)+"?\n\n"+
+      "המתמחים כבר ראו את הלוח הזה. אם ירוץ שיבוץ חדש, מי שתכנן לפיו עלול לגלות תורנות אחרת.")) return;
+    await srvApi("/api/months/"+CUR_YM+"/freeze",{method:"POST",body:{frozen:false}});
+    toast("ההקפאה בוטלה");
+  }else{
+    if(!confirm("להקפיא ולפרסם את "+ymLabel(CUR_YM)+"?\n\n"+
+      "• השיבוץ יוקפא — עריכה והרצה מחדש ייחסמו\n"+
+      "• המתמחים יראו את הלוח המלא ואת התורנויות שלהם\n"+
+      "• הזנת התאריכים לחודש הזה תיסגר\n"+
+      "• תמיד אפשר לבטל את ההקפאה")) return;
+    try{
+      await srvApi("/api/months/"+CUR_YM+"/freeze",{method:"POST",body:{frozen:true}});
+      toast("השיבוץ הוקפא ופורסם למתמחים");
+    }catch(e){ toast(e.message,true); return; }
+  }
+  await refreshMonths(); renderMonths();
+};
+
+/* archive every successful run, so the month keeps its result */
+async function archiveResult(data){
+  if(!CUR_YM) return;
+  const ym = String(data.year)+"-"+String(data.month).padStart(2,"0");
+  try{
+    await srvApi("/api/months/"+ym+"/assignment",{method:"POST",body:{
+      assignments:data.assignments, stats:data.stats||"", xlsx:data.xlsx||null}});
+    await refreshMonths();
+  }catch(e){ console.warn("archive failed:", e.message); }
+}
+
 (async function init(){
   // 1) start with local/seed for instant render
   if(!loadFromLocal()) loadFromSeed();
@@ -1736,5 +1932,7 @@ async function tryLoadFromServer(){
     renderRoster(); renderEditor();
     console.log("Loaded state from server");
   }
+  // which month am I editing, and is it frozen?
+  try{ await refreshMonths(); }catch(e){ console.warn("months:", e.message); }
 })();
 </script>

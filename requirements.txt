@@ -2,3 +2,6 @@ flask==3.0.3
 flask-cors==4.0.1
 openpyxl==3.1.5
 gunicorn==22.0.0
+# Only used when DATABASE_URL is set (free hosting keeps data in Postgres,
+# because the free filesystem is wiped on every deploy).
+psycopg[binary]==3.2.9

@@ -995,16 +995,17 @@ def BUILD(assign, order, name_of, notes_lines=None):
     for j,h in enumerate(cols,1):
         c=g.cell(3,j,h); c.font=font(True,10,"FFFFFF"); c.fill=fill(BLUE); c.alignment=center; c.border=border
     MROW="'מטריצת מתמחה'!"
-    def mrange(r): return f"{MROW}$B{r}:$AF{r}"  # B..AF = days 1..31
+    LASTCOL=get_column_letter(1+len(DAYS))       # last day column, month-dependent
+    def mrange(r): return f"{MROW}$B{r}:${LASTCOL}{r}"
     for idx,iid in enumerate(order):
         gr=4+idx; mr=first_intern_row+idx
         g.cell(gr,1,name_of[iid]).font=font(True,10); g.cell(gr,1).alignment=right
-        rng=f"{MROW}B{mr}:AF{mr}"
+        rng=f"{MROW}B{mr}:{LASTCOL}{mr}"
         g.cell(gr,2,f'=COUNTA({rng})')                                   # total
-        g.cell(gr,4,f'=SUMPRODUCT(({rng}<>"")*({MROW}B$4:AF$4))')        # thu (row 4)
-        g.cell(gr,5,f'=SUMPRODUCT(({rng}<>"")*({MROW}B$5:AF$5))')        # fri (row 5)
-        g.cell(gr,6,f'=SUMPRODUCT(({rng}<>"")*({MROW}B$6:AF$6))')        # sat (row 6)
-        g.cell(gr,7,f'=SUMPRODUCT(({rng}<>"")*({MROW}B$7:AF$7))')        # weekend (row 7)
+        g.cell(gr,4,f'=SUMPRODUCT(({rng}<>"")*({MROW}B$4:{LASTCOL}$4))')        # thu (row 4)
+        g.cell(gr,5,f'=SUMPRODUCT(({rng}<>"")*({MROW}B$5:{LASTCOL}$5))')        # fri (row 5)
+        g.cell(gr,6,f'=SUMPRODUCT(({rng}<>"")*({MROW}B$6:{LASTCOL}$6))')        # sat (row 6)
+        g.cell(gr,7,f'=SUMPRODUCT(({rng}<>"")*({MROW}B$7:{LASTCOL}$7))')        # weekend (row 7)
         g.cell(gr,3,f'=B{gr}-G{gr}')                                     # weekday = total - weekend
         for k,st in enumerate(STATIONS):                                  # per-station
             lab=SLAB[st].replace('"','""')

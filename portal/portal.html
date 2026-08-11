@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>התורנויות שלי</title>
+<style>
+  /* Continues the editor's identity. The teal is new and means one thing only:
+     this is yours. */
+  :root{
+    --navy:#1F3864; --blue:#2E5496; --blue-soft:#E7ECF6; --blue-line:#BCCBE6;
+    --ink:#14213A; --muted:#5A6577; --faint:#909BAC;
+    --line:#DCE3EE; --surface:#fff; --page:#F0F3F8;
+    --mine:#0E6E62; --mine-bg:#DDEFEA; --mine-line:#9CCFC4;
+    --weak:#C0392B; --weak-bg:#F8CBAD; --weak-line:#E8A98A;
+    --strong:#548235; --strong-bg:#C6EFCE; --strong-line:#9EC788;
+    --mid-bg:#FFF2CC; --wknd:#FCE4D6; --wknd-ink:#9A4B12;
+    --hol-eve:#E7E0F7; --hol-day:#CDBDF0; --hol-ink:#46278F;
+    --shadow:0 1px 2px rgba(31,56,100,.06), 0 8px 24px rgba(31,56,100,.07);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{direction:rtl; background:var(--page); color:var(--ink); font-size:14.5px; line-height:1.5;
+    font-family:"Segoe UI",-apple-system,system-ui,"Helvetica Neue",Arial,"Noto Sans Hebrew",sans-serif;
+    -webkit-text-size-adjust:100%}
+  button,input,select{font-family:inherit; font-size:14px} button{cursor:pointer}
+  :focus-visible{outline:2px solid var(--blue); outline-offset:2px}
+
+  header.bar{position:sticky; top:0; z-index:30; display:flex; align-items:center; gap:12px;
+    padding:11px 18px; background:var(--navy); color:#fff}
+  .bar h1{font-size:16px; font-weight:700; margin:0; white-space:nowrap}
+  .bar .who{font-size:12.5px; color:#C7D2E8}
+  .bar .spacer{flex:1}
+  select.month{border:1px solid #5870A0; background:#16294D; color:#fff; border-radius:8px;
+    padding:7px 10px; font-weight:600}
+  .btn{border:1px solid transparent; border-radius:9px; padding:8px 14px; font-size:13.5px;
+    font-weight:600; background:#fff; color:var(--navy); box-shadow:var(--shadow)}
+  .btn:hover{background:#F2F5FB}
+  .btn:disabled{opacity:.45; cursor:not-allowed}
+  .btn.ghost{background:transparent; color:#fff; border-color:#5870A0; box-shadow:none}
+  .btn.go{background:#7FB069; color:#14300A; border-color:#6FA15A}
+  .wrap{max-width:760px; margin:0 auto; padding:20px}
+  .card{background:var(--surface); border:1px solid var(--line); border-radius:12px;
+    padding:16px 18px; margin-bottom:16px; box-shadow:var(--shadow)}
+  .card h2{margin:0 0 4px; font-size:16px; color:var(--navy)}
+  .lede{margin:0 0 14px; color:var(--muted); font-size:13px}
+  .empty{color:var(--muted); text-align:center; padding:40px 20px}
+  .notice{display:flex; gap:11px; align-items:flex-start; border-radius:10px; padding:11px 14px;
+    font-size:13.5px; margin-bottom:14px; border:1px solid}
+  .notice b{display:block; margin-bottom:2px}
+  .notice.info{background:var(--blue-soft); border-color:var(--blue-line); color:#1B3868}
+  .notice.lock{background:#EDF0F6; border-color:#C6D0E2; color:var(--navy)}
+  .notice.bad{background:#FDECE7; border-color:var(--weak-line); color:#8E2A1D}
+
+  .signin{max-width:400px; margin:12vh auto; text-align:center}
+  .signin .mark{font-size:12px; letter-spacing:2.5px; color:var(--faint); margin-bottom:10px}
+  .signin h1{font-size:24px; color:var(--navy); margin:0 0 6px}
+  .signin p{color:var(--muted); font-size:13.5px; margin:0 0 20px}
+  input.code{width:100%; text-align:center; font-size:26px; font-weight:700; letter-spacing:9px;
+    padding:14px 10px; border:1px solid var(--line); border-radius:10px; text-transform:uppercase;
+    font-variant-numeric:tabular-nums; background:#fff}
+  input.code:focus{outline:none; border-color:var(--blue); box-shadow:0 0 0 3px rgba(46,84,150,.14)}
+
+  .legend{display:flex; gap:14px; flex-wrap:wrap; font-size:12px; color:var(--muted); align-items:center}
+  .legend i{display:inline-block; width:12px; height:12px; border-radius:3px; vertical-align:-2px; margin-inline-end:5px}
+  .cal{display:grid; grid-template-columns:repeat(7,1fr); gap:6px}
+  .cal .dow{text-align:center; font-size:11.5px; color:var(--muted); font-weight:700}
+  .cal .day{aspect-ratio:1/1; border:1px solid var(--line); border-radius:10px; background:#fff;
+    display:flex; align-items:center; justify-content:center; font-weight:600; font-size:15px;
+    font-variant-numeric:tabular-nums; user-select:none}
+  .cal .day.pad{border:none; background:transparent}
+  .cal .day.wknd{background:#F5F7FB}
+  .cal .day.blocked{background:var(--weak-bg); border-color:var(--weak-line); color:var(--weak)}
+  .cal .day.preferred{background:var(--strong-bg); border-color:var(--strong-line); color:var(--strong)}
+  .cal .day.holeve{box-shadow:inset 0 -4px 0 var(--hol-eve)}
+  .cal .day.holday{box-shadow:inset 0 -4px 0 var(--hol-day)}
+  .cal .day.tap{cursor:pointer}
+  .cal .day.tap:hover{box-shadow:0 0 0 2px var(--blue) inset}
+  .saverow{display:flex; align-items:center; gap:12px; margin-top:14px; flex-wrap:wrap}
+  .saverow .state{font-size:12.5px; color:var(--muted)}
+
+  .counts{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px}
+  .count{flex:1; min-width:78px; background:#fff; border:1px solid var(--line); border-radius:10px;
+    padding:10px 12px; text-align:center}
+  .count b{display:block; font-size:22px; color:var(--navy); line-height:1.15; font-variant-numeric:tabular-nums}
+  .count span{font-size:11.5px; color:var(--muted)}
+  .count.mine b{color:var(--mine)}
+
+  /* the ribbon: the whole month in one column, so the shape of your month —
+     where shifts clump, where the gaps fall — is visible at a glance */
+  .ribbon{border-inline-start:2px solid var(--line); margin-inline-start:44px}
+  .rday{display:flex; align-items:center; gap:12px; position:relative}
+  .rday .date{position:absolute; inset-inline-start:100%; margin-inline-start:-46px; width:42px;
+    text-align:center; color:var(--faint); font-size:12px; font-variant-numeric:tabular-nums}
+  .rday .date b{display:block; font-size:14px; color:var(--muted); font-weight:700}
+  .rday.tick{height:15px}
+  .rday.tick .date b{font-size:11.5px; font-weight:600; color:var(--faint)}
+  .rday.tick .bar-line{height:1px; width:14px; background:var(--line)}
+  .rday.on{margin:7px 0}
+  .rday.on .date b{color:var(--mine); font-size:16px}
+  .rday.on.wknd .date b{color:var(--wknd-ink)}
+  .rday .conn{position:absolute; inset-inline-start:100%; width:12px; height:2px; background:var(--mine-line)}
+  .shift{flex:1; display:flex; align-items:center; gap:10px; background:var(--mine-bg);
+    border:1px solid var(--mine-line); border-inline-start:4px solid var(--mine);
+    border-radius:10px; padding:9px 13px}
+  .shift .st{font-weight:700; color:var(--mine); font-size:15px}
+  .shift .tag{font-size:11.5px; font-weight:700; padding:2px 8px; border-radius:20px;
+    background:var(--wknd); color:var(--wknd-ink)}
+  .shift .tag.hol{background:var(--hol-day); color:var(--hol-ink)}
+
+  .tablewrap{overflow:auto; border:1px solid var(--line); border-radius:12px; background:#fff}
+  table.sched{border-collapse:separate; border-spacing:0; width:100%; min-width:600px}
+  table.sched th{background:var(--blue); color:#fff; font-size:12.5px; padding:9px 6px;
+    text-align:center; position:sticky; top:0}
+  table.sched th.daycol{background:var(--navy); width:74px}
+  table.sched td{border-top:1px solid var(--line); padding:7px 6px; text-align:center; font-size:13px}
+  table.sched td.daycol{font-weight:700; background:#F7F9FC; font-variant-numeric:tabular-nums; white-space:nowrap}
+  table.sched tr.wknd td{background:#FFF8F4}
+  table.sched tr.wknd td.daycol{background:var(--wknd); color:var(--wknd-ink)}
+  table.sched td.mine{background:var(--mine-bg); color:var(--mine); font-weight:700;
+    box-shadow:inset 0 0 0 1px var(--mine-line)}
+  table.sched td.ext{background:var(--mid-bg); color:#7A5300; font-size:12px}
+
+  .toast{position:fixed; inset-block-end:22px; inset-inline:0; margin:auto; width:max-content;
+    max-width:90%; background:var(--navy); color:#fff; padding:11px 18px; border-radius:10px;
+    opacity:0; transform:translateY(8px); transition:.2s; pointer-events:none; z-index:60; font-size:13.5px}
+  .toast.show{opacity:1; transform:none}
+  .toast.err{background:#8E2A1D}
+  @media(max-width:520px){ .wrap{padding:14px} .cal{gap:4px} .cal .day{font-size:13.5px; border-radius:8px} }
+</style>
+
+<div id="app"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const ST = [["er1","מיון 1"],["er2","מיון 2"],["nicu1","פגיה 1"],
+            ["nicu2","פגיה 2"],["ward","מחלקה"],["picu",'טיפ"נ']];
+const ST_HE = Object.fromEntries(ST);
+const DOW_HEAD = ["א","ב","ג","ד","ה","ו","ש"];
+const $ = s => document.querySelector(s);
+const app = () => $("#app");
+let S = { name:null, months:[], ym:null, d:null, dirty:false };
+
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function toast(msg, bad){
+  const t=$("#toast"); t.textContent=msg; t.className="toast show"+(bad?" err":"");
+  clearTimeout(t._t); t._t=setTimeout(()=>t.className="toast",2600);
+}
+async function api(path, opts={}){
+  const r = await fetch(path, {headers:{"Content-Type":"application/json"},
+    credentials:"same-origin", ...opts,
+    body: opts.body ? JSON.stringify(opts.body) : undefined});
+  const j = await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(j.error || "משהו השתבש. אפשר לנסות שוב.");
+  return j;
+}
+
+/* ---------------------------------------------------------- sign in ----- */
+function renderSignIn(err){
+  app().innerHTML = `
+    <div class="wrap signin">
+      <div class="mark">שיבוץ תורנויות</div>
+      <h1>התורנויות שלי</h1>
+      <p>הזינו את קוד הגישה האישי שקיבלתם מרכז/ת השיבוץ.</p>
+      <div class="card">
+        <input class="code" id="code" maxlength="6" autocomplete="one-time-code"
+               placeholder="••••••" aria-label="קוד גישה אישי">
+        ${err?`<div class="notice bad" style="margin:14px 0 0"><span>${esc(err)}</span></div>`:""}
+        <button class="btn" id="go" style="width:100%;margin-top:14px;padding:11px;background:var(--blue);color:#fff">כניסה</button>
+      </div>
+    </div>`;
+  const i=$("#code"); i.focus();
+  i.oninput=()=>i.value=i.value.toUpperCase().replace(/[^A-Z0-9]/g,"");
+  i.onkeydown=e=>{ if(e.key==="Enter") $("#go").click(); };
+  $("#go").onclick=async()=>{
+    try{ await api("/api/portal/login",{method:"POST",body:{code:i.value}}); boot(); }
+    catch(e){ renderSignIn(e.message); }
+  };
+}
+
+/* ------------------------------------------------------------ shell ----- */
+function shell(inner){
+  const opts=S.months.map(m=>`<option value="${m.ym}" ${m.ym===S.ym?"selected":""}>${esc(m.label)}</option>`).join("");
+  app().innerHTML=`
+    <header class="bar">
+      <h1>התורנויות שלי</h1><span class="who">${esc(S.name||"")}</span>
+      <span class="spacer"></span>
+      ${S.months.length?`<select class="month" id="ymSel">${opts}</select>`:""}
+      <button class="btn ghost" id="out">יציאה</button>
+    </header>
+    <div class="wrap">${inner}</div>`;
+  const sel=$("#ymSel");
+  if(sel) sel.onchange=()=>{ S.ym=sel.value; loadMonth(); };
+  $("#out").onclick=async()=>{ await api("/api/portal/logout",{method:"POST"}); boot(); };
+}
+
+function stateNotice(m){
+  if(m.status==="frozen")
+    return `<div class="notice lock"><span>🔒</span><span><b>הלוח לחודש זה סופי</b>
+      השיבוץ הוקפא ולא ישתנה. אי אפשר יותר לעדכן תאריכים לחודש הזה.</span></div>`;
+  return `<div class="notice info"><span>✎</span><span><b>אפשר לעדכן תאריכים</b>
+    סמנו ימים שאינכם יכולים לתרון בהם וימים שתעדיפו לתרון בהם, ואז שמרו.
+    הלוח יופיע כאן ברגע שיוקפא.</span></div>`;
+}
+
+/* --------------------------------------------------------- my dates ----- */
+function sectionDates(d){
+  const upd = d.me.updatedAt
+    ? `עודכן לאחרונה ${esc(d.me.updatedAt)}${d.me.updatedBy==="intern"?"":" (ע״י רכז/ת השיבוץ)"}`
+    : "עוד לא הוזנו תאריכים לחודש הזה";
+  return `<div class="card">
+    <h2>הימים שלי ב${esc(d.month.label)}</h2>
+    <p class="lede">לחיצה על יום מחליפה בין: רגיל ← <b style="color:var(--weak)">לא יכול/ה</b>
+      ← <b style="color:var(--strong)">מעדיף/ה</b> ← רגיל.</p>
+    <div class="legend" style="margin-bottom:10px">
+      <span><i style="background:var(--weak-bg);border:1px solid var(--weak-line)"></i>לא יכול/ה לתרון</span>
+      <span><i style="background:var(--strong-bg);border:1px solid var(--strong-line)"></i>מעדיף/ה לתרון</span>
+      <span><i style="background:var(--hol-day)"></i>חג / ערב חג</span>
+    </div>
+    <div class="cal" id="cal"></div>
+    <div class="saverow">
+      ${d.month.canEdit?`<button class="btn go" id="save" disabled>שמירת התאריכים</button>`:""}
+      <span class="state" id="saveState">${esc(upd)}</span>
+    </div></div>`;
+}
+
+function drawCal(){
+  const d=S.d, cal=$("#cal"); if(!cal) return;
+  cal.innerHTML="";
+  DOW_HEAD.forEach(x=>{const e=document.createElement("div");e.className="dow";e.textContent=x;cal.appendChild(e);});
+  const first=new Date(d.days[0].iso+"T00:00:00").getDay();
+  for(let i=0;i<first;i++){const e=document.createElement("div");e.className="day pad";cal.appendChild(e);}
+  const B=new Set(d.me.blocked), P=new Set(d.me.preferred), editable=d.month.canEdit;
+  for(const day of d.days){
+    const e=document.createElement("div");
+    let cls="day"+(day.isWeekend?" wknd":"")+(editable?" tap":"");
+    if(B.has(day.iso)) cls+=" blocked"; else if(P.has(day.iso)) cls+=" preferred";
+    if(day.holidayKind==="eve") cls+=" holeve";
+    if(day.holidayKind && day.holidayKind!=="eve") cls+=" holday";
+    e.className=cls; e.textContent=day.day;
+    e.title=`${day.day} · יום ${day.dowHe}${day.holiday?" · "+day.holiday:""}`;
+    if(editable){
+      e.setAttribute("role","button"); e.tabIndex=0;
+      const cycle=()=>{
+        const bi=d.me.blocked.indexOf(day.iso), pi=d.me.preferred.indexOf(day.iso);
+        if(bi<0&&pi<0) d.me.blocked.push(day.iso);
+        else if(bi>=0){ d.me.blocked.splice(bi,1); d.me.preferred.push(day.iso); }
+        else d.me.preferred.splice(pi,1);
+        S.dirty=true; drawCal();
+        const b=$("#save"); if(b) b.disabled=false;
+        $("#saveState").textContent="יש שינויים שלא נשמרו";
+      };
+      e.onclick=cycle;
+      e.onkeydown=ev=>{ if(ev.key==="Enter"||ev.key===" "){ ev.preventDefault(); cycle(); } };
+    }
+    cal.appendChild(e);
+  }
+}
+
+function wireDates(){
+  drawCal();
+  const b=$("#save"); if(!b) return;
+  b.disabled=!S.dirty;
+  b.onclick=async()=>{
+    b.disabled=true; $("#saveState").textContent="שומר…";
+    try{
+      const r=await api(`/api/portal/months/${S.ym}/dates`,{method:"PUT",
+        body:{blocked:S.d.me.blocked, preferred:S.d.me.preferred}});
+      S.d.me.blocked=r.blocked; S.d.me.preferred=r.preferred; S.dirty=false;
+      $("#saveState").textContent="התאריכים נשמרו"; toast("התאריכים נשמרו"); drawCal();
+    }catch(e){ b.disabled=false; $("#saveState").textContent=""; toast(e.message,true); }
+  };
+}
+
+/* -------------------------------------------------------- my shifts ----- */
+function sectionMine(d){
+  const c=d.myCounts, mine=new Map(d.myShifts.map(s=>[s.day,s]));
+  if(!d.myShifts.length)
+    return `<div class="card"><h2>התורנויות שלי</h2>
+      <div class="empty">אין לכם תורנויות בחודש הזה.</div></div>`;
+  const rows=d.days.map(day=>{
+    const s=mine.get(day.day);
+    if(!s) return `<div class="rday tick"><div class="date"><b>${day.day}</b></div><div class="bar-line"></div></div>`;
+    const tag = s.holiday ? `<span class="tag hol">${esc(s.holiday)}</span>`
+      : s.isSat ? `<span class="tag">שבת</span>` : s.isFri ? `<span class="tag">שישי</span>` : "";
+    return `<div class="rday on${day.isWeekend?" wknd":""}">
+      <div class="date"><b>${day.day}</b>${esc(day.dowHe)}</div><div class="conn"></div>
+      <div class="shift"><span class="st">${esc(ST_HE[s.station]||s.station)}</span>
+        <span style="flex:1"></span>${tag}</div></div>`;
+  }).join("");
+  return `<div class="card">
+    <h2>התורנויות שלי</h2>
+    <p class="lede">${esc(d.month.label)} · ${c.total} תורנויות</p>
+    <div class="counts">
+      <div class="count mine"><b>${c.total}</b><span>סה״כ</span></div>
+      <div class="count"><b>${c.weekday}</b><span>חול</span></div>
+      <div class="count"><b>${c.friday}</b><span>שישי / ערב חג</span></div>
+      <div class="count"><b>${c.saturday}</b><span>שבת / חג</span></div>
+      <div class="count"><b>${c.weekend}</b><span>סופ״ש</span></div>
+    </div>
+    <div class="ribbon">${rows}</div></div>`;
+}
+
+function sectionPending(){
+  return `<div class="card"><h2>התורנויות שלי</h2>
+    <div class="empty">הלוח עוד לא פורסם. הוא יופיע כאן ברגע שרכז/ת השיבוץ יקפיא/תקפיא את החודש.</div></div>`;
+}
+
+/* ------------------------------------------------------- full table ----- */
+function sectionTable(d){
+  const ext=new Set(d.schedule.externalCells.map(c=>c.day+"|"+c.station));
+  const mineSet=new Set(d.myShifts.map(s=>s.day+"|"+s.station));
+  const head=`<tr><th class="daycol">יום</th>${ST.map(([,n])=>`<th>${n}</th>`).join("")}</tr>`;
+  const body=d.days.map(day=>{
+    const cells=ST.map(([k])=>{
+      const nm=(d.schedule.grid[String(day.day)]||{})[k]||"";
+      const cls = mineSet.has(day.day+"|"+k) ? "mine" : ext.has(day.day+"|"+k) ? "ext" : "";
+      return `<td class="${cls}">${esc(nm||"—")}</td>`;
+    }).join("");
+    return `<tr class="${day.isWeekend?"wknd":""}"><td class="daycol">${day.day}
+      <span style="color:var(--muted);font-weight:400">${esc(day.dowHe)}</span></td>${cells}</tr>`;
+  }).join("");
+  return `<div class="card"><h2>הלוח המלא</h2>
+    <p class="lede">התורנויות שלכם מסומנות בירוק. תאים בצהוב — תורני חוץ.</p>
+    <div class="tablewrap"><table class="sched"><thead>${head}</thead><tbody>${body}</tbody></table></div></div>`;
+}
+
+/* ------------------------------------------------------------- boot ----- */
+function renderMonth(){
+  const d=S.d;
+  shell(stateNotice(d.month) + sectionDates(d)
+        + (d.schedule ? sectionMine(d) : sectionPending())
+        + (d.schedule ? sectionTable(d) : ""));
+  wireDates();
+}
+
+async function loadMonth(){
+  try{ S.d=await api(`/api/portal/months/${S.ym}`); S.dirty=false; renderMonth(); }
+  catch(e){ toast(e.message,true); }
+}
+
+async function boot(){
+  let me;
+  try{ me=await api("/api/portal/me"); }
+  catch(e){ return renderSignIn(); }
+  S.name=me.name; S.months=me.months;
+  if(!S.months.length){
+    shell(`<div class="card"><div class="empty">עוד לא נפתח עבורכם חודש שיבוץ.<br>
+      כשרכז/ת השיבוץ יפתח/תפתח חודש, הוא יופיע כאן.</div></div>`);
+    return;
+  }
+  S.ym = (S.months.find(m=>m.canEdit) || S.months[0]).ym;
+  await loadMonth();
+}
+
+window.addEventListener("beforeunload", e=>{ if(S.dirty){ e.preventDefault(); e.returnValue=""; } });
+boot();
+</script>
+</html>

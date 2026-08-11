@@ -1,26 +1,74 @@
 # -*- coding: utf-8 -*-
 """Web backend for the monthly on-call scheduler.
-POST /generate → JSON with schedule data + base64 xlsx.
-GET/POST /api/state/<key> → persistent file-based storage for editor state.
+
+Admin (HTTP Basic, APP_PASSWORD) — used by intern_editor.html:
+  POST /generate                    run the solver, return schedule + base64 xlsx
+  GET/POST /api/state/<key>         editor state; now scoped to the current month
+  GET/POST /api/months...           month archive, freeze/publish, access codes
+
+Intern portal (session cookie, personal code) — served from /portal/:
+  GET  /api/portal/me               who am I, which months can I see
+  GET  /api/portal/months/<ym>      my dates, my shifts, the published table
+  PUT  /api/portal/months/<ym>/dates
+
+Every month is stored whole — roster, external duties, holidays, assignment and
+workbook together — so a past month is re-read, never re-solved.
 
 Run locally:   python3 app.py            (http://localhost:5000)
 Run in prod:   gunicorn app:app --timeout 600 --workers 1
 """
 import base64
+import calendar
 import csv
+import datetime
 import hmac
 import json
 import os
+import re
+import secrets
 import shutil
 import subprocess
+import sys
 import tempfile
 from functools import wraps
 
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+from flask import Flask, request, jsonify, session, send_from_directory
+
+try:
+    from flask_cors import CORS
+except ImportError:                       # keep the app runnable without the extra
+    CORS = None
+
+import store
 
 app = Flask(__name__)
-CORS(app)
+# The editor is hosted separately (Netlify) and authenticates with Basic auth,
+# so it needs CORS. The portal is served from this same origin and uses a
+# session cookie, which must never be readable cross-site.
+# Paths the separately-hosted editor calls cross-origin. The portal is served
+# from this origin and must NOT be listed: its session cookie has to stay
+# same-site.
+CROSS_ORIGIN = ("/api/state", "/generate", "/api/months", "/api/codes",
+                "/api/audit", "/health")
+
+if CORS is not None:
+    CORS(app, resources={p + "*": {"origins": "*"} for p in CROSS_ORIGIN})
+else:
+    @app.after_request
+    def _cors(resp):
+        if request.path.startswith(CROSS_ORIGIN):
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            resp.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
+            resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+        return resp
+
+    @app.route("/<path:_any>", methods=["OPTIONS"])
+    def _preflight(_any):
+        return ("", 204)
+app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
+                  SESSION_COOKIE_SECURE=os.environ.get("SECURE_COOKIES") == "1",
+                  PERMANENT_SESSION_LIFETIME=datetime.timedelta(hours=12))
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SCHEDULER = os.path.join(BASE_DIR, "monthly_scheduler.py")
@@ -30,6 +78,75 @@ os.makedirs(DATA_DIR, exist_ok=True)
 APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
 
 ALLOWED_KEYS = {"interns", "external", "holidays"}
+
+# Interns see a month's table once it is frozen. Drafts change on every run, so
+# they stay private unless this is turned on.
+SHOW_DRAFTS = os.environ.get("SHOW_DRAFTS") == "1"
+
+PORTAL_DIR = os.path.join(BASE_DIR, "portal")
+STATION_HE = {"er1": "מיון 1", "er2": "מיון 2", "nicu1": "פגיה 1",
+              "nicu2": "פגיה 2", "ward": "מחלקה", "picu": 'טיפ"נ'}
+HEB_DOW = ["ב׳", "ג׳", "ד׳", "ה׳", "ו׳", "שבת", "א׳"]      # Monday-indexed
+MONTHS_HE = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני",
+             "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"]
+
+
+def _default_ym():
+    t = datetime.date.today()
+    return f"{t.year:04d}-{t.month:02d}"
+
+
+store.init_db()
+store.migrate_legacy(DATA_DIR, _default_ym())
+
+
+@app.teardown_request
+def _release_db(exc=None):
+    store.release()
+
+
+def current_ym():
+    ym = store.setting("current_ym")
+    if ym and store.get_month(ym):
+        return ym
+    months = store.list_months()
+    if months:
+        ym = months[0]["ym"]
+    else:
+        ym = _default_ym()
+        store.create_month(ym)
+    store.set_setting("current_ym", ym)
+    return ym
+
+
+def ym_label(ym):
+    y, m = (int(x) for x in ym.split("-"))
+    return f"{MONTHS_HE[m-1]} {y}"
+
+
+def day_meta(ym, holidays):
+    """Day-by-day calendar facts. A holiday eve counts as Friday and a holiday
+    as Saturday, matching what the solver does."""
+    y, m = (int(x) for x in ym.split("-"))
+    out = []
+    for d in range(1, calendar.monthrange(y, m)[1] + 1):
+        iso = f"{y:04d}-{m:02d}-{d:02d}"
+        dow = datetime.date(y, m, d).weekday()
+        is_fri, is_sat = dow == 4, dow == 5
+        h = holidays.get(iso)
+        kind = None
+        if h:
+            kind = h.get("kind") if isinstance(h, dict) else str(h)
+            if kind == "eve":
+                is_fri = True
+            else:
+                is_sat = True
+        out.append({"day": d, "iso": iso, "dowHe": HEB_DOW[dow],
+                    "isFri": is_fri, "isSat": is_sat, "isWeekend": is_fri or is_sat,
+                    "holiday": (h.get("name") if isinstance(h, dict) else None) or
+                               ("ערב חג" if kind == "eve" else "חג" if kind else None),
+                    "holidayKind": kind})
+    return out
 
 
 def require_auth(view):
@@ -56,13 +173,14 @@ def health():
 @app.get("/api/state/<key>")
 @require_auth
 def get_state(key):
+    """Kept at the same URL the editor already calls, but the data now belongs
+    to the currently selected month instead of being one global blob."""
     if key not in ALLOWED_KEYS:
         return jsonify(error="Invalid key"), 400
-    path = os.path.join(DATA_DIR, f"{key}.json")
-    if not os.path.exists(path):
-        return jsonify(data=None)
-    with open(path, encoding="utf-8") as f:
-        return jsonify(data=json.load(f))
+    ym = request.args.get("ym") or current_ym()
+    m = store.get_month(ym)
+    return jsonify(data=(m or {}).get(key), ym=ym,
+                   status=(m or {}).get("status", "draft"))
 
 
 @app.post("/api/state/<key>")
@@ -70,11 +188,137 @@ def get_state(key):
 def save_state(key):
     if key not in ALLOWED_KEYS:
         return jsonify(error="Invalid key"), 400
-    data = request.get_json()
-    path = os.path.join(DATA_DIR, f"{key}.json")
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False)
+    ym = request.args.get("ym") or current_ym()
+    if store.is_frozen(ym):
+        return jsonify(error=f"החודש {ym_label(ym)} מוקפא — יש לבטל את ההקפאה כדי לערוך"), 409
+    if store.get_month(ym) is None:
+        store.create_month(ym)
+    store.patch_month(ym, **{key: request.get_json()})
+    store.log("admin", f"edit_{key}", ym)
+    return jsonify(ok=True, ym=ym)
+
+
+# =====================================================================
+#                        month archive
+# =====================================================================
+@app.get("/api/months")
+@require_auth
+def api_months():
+    months = store.list_months()
+    for m in months:
+        m["label"] = ym_label(m["ym"])
+    return jsonify(months=months, current=current_ym())
+
+
+@app.post("/api/months")
+@require_auth
+def api_create_month():
+    b = request.get_json(silent=True) or {}
+    ym = (b.get("ym") or "").strip()
+    if not re.match(r"^\d{4}-\d{2}$", ym):
+        return jsonify(error="פורמט חודש לא תקין (YYYY-MM)"), 400
+    if store.get_month(ym):
+        return jsonify(error="החודש כבר קיים"), 409
+    store.create_month(ym, source_ym=b.get("sourceYm") or None,
+                       copy_external=bool(b.get("copyExternal")),
+                       copy_holidays=bool(b.get("copyHolidays")))
+    store.set_setting("current_ym", ym)
+    store.log("admin", "create_month", ym, f"source={b.get('sourceYm') or 'blank'}")
+    return jsonify(ok=True, ym=ym, month=store.month_meta(ym))
+
+
+@app.post("/api/months/<ym>/select")
+@require_auth
+def api_select_month(ym):
+    if store.get_month(ym) is None:
+        return jsonify(error="החודש לא נמצא"), 404
+    store.set_setting("current_ym", ym)
+    return jsonify(ok=True, ym=ym)
+
+
+@app.get("/api/months/<ym>")
+@require_auth
+def api_get_month(ym):
+    m = store.get_month(ym)
+    if m is None:
+        return jsonify(error="החודש לא נמצא"), 404
+    m["label"] = ym_label(ym)
+    m["hasXlsx"] = store.get_artifact(ym)[0] is not None
+    return jsonify(month=m)
+
+
+@app.delete("/api/months/<ym>")
+@require_auth
+def api_delete_month(ym):
+    if store.is_frozen(ym):
+        return jsonify(error="אי אפשר למחוק חודש מוקפא"), 409
+    store.delete_month(ym)
+    store.log("admin", "delete_month", ym)
     return jsonify(ok=True)
+
+
+@app.post("/api/months/<ym>/assignment")
+@require_auth
+def api_save_assignment(ym):
+    """Called by the editor right after a successful run, so the archive holds
+    the result and not just the inputs."""
+    if store.is_frozen(ym):
+        return jsonify(error="החודש מוקפא — השיבוץ לא שונה"), 409
+    b = request.get_json(silent=True) or {}
+    if store.get_month(ym) is None:
+        store.create_month(ym)
+    store.patch_month(ym, assignment=b.get("assignments") or [],
+                      stats=b.get("stats") or "", generated_at=store.now())
+    if b.get("xlsx"):
+        try:
+            store.put_artifact(ym, f"schedule_{ym}.xlsx", base64.b64decode(b["xlsx"]))
+        except Exception:                                          # noqa: BLE001
+            pass
+    store.log("admin", "save_assignment", ym, b.get("stats") or "")
+    return jsonify(ok=True, month=store.month_meta(ym))
+
+
+@app.post("/api/months/<ym>/freeze")
+@require_auth
+def api_freeze(ym):
+    m = store.get_month(ym)
+    if m is None:
+        return jsonify(error="החודש לא נמצא"), 404
+    want = bool((request.get_json(silent=True) or {}).get("frozen", True))
+    if want and not m["assignment"]:
+        return jsonify(error="אין שיבוץ להקפיא — יש ליצור שיבוץ קודם"), 400
+    store.set_status(ym, "frozen" if want else "draft")
+    store.log("admin", "freeze" if want else "unfreeze", ym)
+    return jsonify(ok=True, month=store.month_meta(ym))
+
+
+@app.get("/api/months/<ym>/xlsx")
+@require_auth
+def api_month_xlsx(ym):
+    name, blob = store.get_artifact(ym)
+    if not blob:
+        return jsonify(error="לא נשמר קובץ אקסל לחודש הזה"), 404
+    return jsonify(filename=name, xlsx=base64.b64encode(blob).decode("ascii"))
+
+
+@app.get("/api/codes")
+@require_auth
+def api_codes():
+    return jsonify(codes=store.list_codes())
+
+
+@app.post("/api/codes/<intern_id>/reset")
+@require_auth
+def api_reset_code(intern_id):
+    code = store.reset_code(intern_id)
+    store.log("admin", "reset_code", None, intern_id)
+    return jsonify(ok=True, code=code)
+
+
+@app.get("/api/audit")
+@require_auth
+def api_audit():
+    return jsonify(entries=store.audit_tail(120))
 
 
 @app.post("/generate")
@@ -97,7 +341,8 @@ def generate():
         interns_file.save(interns_path)
 
         out_path = os.path.join(workdir, "schedule.xlsx")
-        cmd = ["python3", SCHEDULER, interns_path, year, month, out_path]
+        cmd = [sys.executable or "python3", SCHEDULER,
+               interns_path, year, month, out_path]
 
         if holidays_file is not None and holidays_file.filename:
             holidays_path = os.path.join(workdir, "holidays.csv")
@@ -238,6 +483,174 @@ def generate():
         return jsonify(error="השיבוץ ארך יותר מדי זמן (timeout)"), 504
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+# =====================================================================
+#                          intern portal
+# =====================================================================
+# Served from this origin so it can use a session cookie. It never receives
+# approvals, strengths, caps, notes, or anyone else's blocked days — those are
+# not filtered in the browser, they are never put in the response.
+@app.get("/portal/")
+@app.get("/portal")
+def portal_index():
+    return send_from_directory(PORTAL_DIR, "portal.html")
+
+
+@app.get("/portal/<path:filename>")
+def portal_asset(filename):
+    return send_from_directory(PORTAL_DIR, filename)
+
+
+def _who():
+    iid = session.get("intern_id")
+    if not iid:
+        return None
+    row = store._con().execute(
+        "SELECT intern_id, name FROM intern_codes WHERE intern_id=?", (iid,)).fetchone()
+    return row
+
+
+def portal_auth(view):
+    @wraps(view)
+    def wrapped(*a, **kw):
+        if not _who():
+            return jsonify(error="נדרשת התחברות"), 401
+        return view(*a, **kw)
+    return wrapped
+
+
+@app.post("/api/portal/login")
+def portal_login():
+    code = ((request.get_json(silent=True) or {}).get("code") or "").strip().upper()
+    who = store.find_by_code(code) if code else None
+    if not who:
+        return jsonify(error="הקוד לא מזוהה. אפשר לקבל קוד חדש מרכז/ת השיבוץ."), 401
+    session.permanent = True
+    session["intern_id"] = who["intern_id"]
+    store.log(who["intern_id"], "intern_login")
+    return jsonify(ok=True, name=who["name"])
+
+
+@app.post("/api/portal/logout")
+def portal_logout():
+    session.clear()
+    return jsonify(ok=True)
+
+
+def _visible(m):
+    return m["status"] == "frozen" or SHOW_DRAFTS
+
+
+@app.get("/api/portal/me")
+@portal_auth
+def portal_me():
+    who = _who()
+    months = []
+    for meta in store.list_months():
+        m = store.get_month(meta["ym"])
+        if not any((it.get("id") == who["intern_id"]) for it in m["interns"]):
+            continue
+        months.append({"ym": m["ym"], "label": ym_label(m["ym"]), "status": m["status"],
+                       "canEdit": m["status"] != "frozen",
+                       "published": _visible(m) and bool(m["assignment"])})
+    return jsonify(name=who["name"], months=months)
+
+
+@app.get("/api/portal/months/<ym>")
+@portal_auth
+def portal_month(ym):
+    who = _who()
+    m = store.get_month(ym)
+    if m is None:
+        return jsonify(error="החודש לא נמצא"), 404
+    me = next((it for it in m["interns"] if it.get("id") == who["intern_id"]), None)
+    if me is None:
+        return jsonify(error="אינך משובץ בחודש הזה"), 403
+
+    days = day_meta(ym, m["holidays"])
+    prefix = ym + "-"
+    editable = m["status"] != "frozen"
+    out = {
+        "month": {"ym": ym, "label": ym_label(ym), "status": m["status"],
+                  "canEdit": editable, "frozenAt": m["frozen_at"]},
+        "days": days,
+        "me": {"name": me.get("name", ""),
+               "blocked": [d for d in (me.get("blocked") or []) if d.startswith(prefix)],
+               "preferred": [d for d in (me.get("preferred") or []) if d.startswith(prefix)],
+               "updatedAt": me.get("_datesAt"), "updatedBy": me.get("_datesBy")},
+        "schedule": None, "myShifts": [], "myCounts": None,
+    }
+    if _visible(m) and m["assignment"]:
+        grid = {}
+        for a in m["assignment"]:
+            grid.setdefault(str(a["day"]), {})[a["station"]] = a.get("name") or ""
+        ext_cells = []
+        for key, name in (m["external"] or {}).items():
+            try:
+                d, st = key.split("|")
+            except ValueError:
+                continue
+            grid.setdefault(str(int(d)), {})[st] = name
+            ext_cells.append({"day": int(d), "station": st})
+        dm = {d["day"]: d for d in days}
+        shifts, fri, sat, wknd = [], 0, 0, 0
+        for a in m["assignment"]:
+            if a.get("id") != who["intern_id"]:
+                continue
+            d = dm.get(a["day"])
+            if not d:
+                continue
+            shifts.append({"day": a["day"], "station": a["station"], "dowHe": d["dowHe"],
+                           "isFri": d["isFri"], "isSat": d["isSat"],
+                           "isWeekend": d["isWeekend"], "holiday": d["holiday"]})
+            fri += d["isFri"]; sat += d["isSat"]; wknd += d["isWeekend"]
+        shifts.sort(key=lambda x: x["day"])
+        out["schedule"] = {"grid": grid, "externalCells": ext_cells}
+        out["myShifts"] = shifts
+        out["myCounts"] = {"total": len(shifts), "friday": fri, "saturday": sat,
+                           "weekend": wknd, "weekday": len(shifts) - wknd}
+    return jsonify(out)
+
+
+@app.put("/api/portal/months/<ym>/dates")
+@portal_auth
+def portal_dates(ym):
+    who = _who()
+    m = store.get_month(ym)
+    if m is None:
+        return jsonify(error="החודש לא נמצא"), 404
+    if m["status"] == "frozen":
+        return jsonify(error="החודש מוקפא — לא ניתן לעדכן תאריכים"), 409
+    b = request.get_json(silent=True) or {}
+    prefix = ym + "-"
+    iso = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+    blocked = {d for d in (b.get("blocked") or []) if iso.match(d) and d.startswith(prefix)}
+    preferred = {d for d in (b.get("preferred") or []) if iso.match(d) and d.startswith(prefix)}
+    preferred -= blocked
+
+    interns = m["interns"]
+    hit = None
+    for it in interns:
+        if it.get("id") != who["intern_id"]:
+            continue
+        # days in other months stay untouched
+        keep_b = [d for d in (it.get("blocked") or []) if not d.startswith(prefix)]
+        keep_p = [d for d in (it.get("preferred") or []) if not d.startswith(prefix)]
+        it["blocked"] = sorted(set(keep_b) | blocked)
+        it["preferred"] = sorted(set(keep_p) | preferred)
+        it["_datesBy"] = "intern"
+        it["_datesAt"] = store.now()
+        hit = it
+        break
+    if hit is None:
+        return jsonify(error="אינך משובץ בחודש הזה"), 403
+    store.patch_month(ym, interns=interns)
+    store.log(who["intern_id"], "intern_dates", ym,
+              f"{len(blocked)} blocked / {len(preferred)} preferred")
+    return jsonify(ok=True,
+                   blocked=[d for d in hit["blocked"] if d.startswith(prefix)],
+                   preferred=[d for d in hit["preferred"] if d.startswith(prefix)])
 
 
 if __name__ == "__main__":
