@@ -157,9 +157,10 @@ def require_auth(view):
         auth = request.authorization
         supplied = auth.password if auth else ""
         if not auth or not hmac.compare_digest(supplied, APP_PASSWORD):
-            return jsonify(error="נדרשת סיסמה"), 401, {
-                "WWW-Authenticate": 'Basic realm="Scheduler"'
-            }
+            # Deliberately no WWW-Authenticate header: it makes the browser pop
+            # its own Basic-auth dialog with a username box, and there is no
+            # username here — only a password. The editor asks for it itself.
+            return jsonify(error="נדרשת סיסמת שרת"), 401
         return view(*args, **kwargs)
     return wrapped
 

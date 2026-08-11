@@ -54,6 +54,15 @@ def main():
     check("no leftover calls to the old helper name",
           not re.search(r"[^v]\bapi\(", js.replace("srvApi(", "")))
 
+    print("\n[password prompt]")
+    r = c.get("/api/months")   # no credentials
+    check("unauthorised returns 401", r.status_code == 401)
+    check("no WWW-Authenticate, so no browser dialog",
+          r.headers.get("WWW-Authenticate") is None, r.headers.get("WWW-Authenticate"))
+    check("the editor has its own prompt", "askServerPassword" in js)
+    check("prompt is shown when the server rejects us",
+          "askServerPassword()" in js)
+
     print("\n[boot: what the editor asks for on load]")
     st, r = call(c, "GET", "/api/state/interns")
     check("GET /api/state/interns", st == 200 and "data" in r)

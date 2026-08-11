@@ -791,6 +791,44 @@ function _authHeaders(){
   if(password) h["Authorization"] = "Basic "+btoa("user:"+password);
   return h;
 }
+
+/* ---- ask for the server password once, in-app ---- */
+function askServerPassword(msg){
+  if(document.getElementById("pwGate")) return;
+  const d=document.createElement("div");
+  d.id="pwGate";
+  d.style.cssText="position:fixed;inset:0;background:rgba(20,33,58,.5);z-index:200;"+
+    "display:flex;align-items:center;justify-content:center;padding:18px";
+  d.innerHTML=`<div style="background:#fff;border-radius:14px;padding:22px 24px;width:min(400px,100%);
+      box-shadow:0 10px 40px rgba(0,0,0,.25)">
+    <h2 style="margin:0 0 6px;font-size:18px;color:var(--navy)">סיסמת שרת</h2>
+    <p style="margin:0 0 16px;color:var(--muted);font-size:13.5px">
+      ${msg||"הזינו את הסיסמה שהוגדרה במשתנה <code>APP_PASSWORD</code>. אין שם משתמש."}</p>
+    <input id="pwGateInput" type="password" autofocus
+      style="width:100%;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font-size:15px">
+    <div id="pwGateErr" style="color:var(--weak);font-size:12.5px;margin-top:8px;display:none"></div>
+    <button id="pwGateGo" class="btn primary" style="width:100%;margin-top:14px;padding:10px">כניסה</button>
+  </div>`;
+  document.body.appendChild(d);
+  const inp=d.querySelector("#pwGateInput"), err=d.querySelector("#pwGateErr");
+  const submit=async()=>{
+    const v=inp.value.trim();
+    if(!v) return;
+    try{
+      const r=await fetch(_backend()+"/api/months",
+        {headers:{"Authorization":"Basic "+btoa("user:"+v)}});
+      if(r.status===401){ err.textContent="סיסמה שגויה"; err.style.display=""; inp.select(); return; }
+      localStorage.setItem("schedulerPassword", v);
+      const gp=document.getElementById("genPassword"); if(gp) gp.value=v;
+      d.remove();
+      location.reload();
+    }catch(e){ err.textContent="אין חיבור לשרת: "+e.message; err.style.display=""; }
+  };
+  d.querySelector("#pwGateGo").onclick=submit;
+  inp.onkeydown=e=>{ if(e.key==="Enter") submit(); };
+  setTimeout(()=>inp.focus(),50);
+}
+
 function _backend(){
   const saved=(localStorage.getItem("schedulerBackendUrl")||"").trim().replace(/\/+$/,"");
   if(saved) return saved;
@@ -1937,6 +1975,11 @@ async function archiveResult(data){
     console.log("Loaded state from server");
   }
   // which month am I editing, and is it frozen?
-  try{ await refreshMonths(); }catch(e){ console.warn("months:", e.message); }
+  try{
+    await refreshMonths();
+  }catch(e){
+    if(/401|סיסמ/.test(e.message)) askServerPassword();
+    else console.warn("months:", e.message);
+  }
 })();
 </script>
