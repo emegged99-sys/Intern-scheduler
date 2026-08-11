@@ -337,7 +337,10 @@ def api_save_assignment(ym):
         return jsonify(error="החודש מוקפא — השיבוץ לא שונה"), 409
     b = request.get_json(silent=True) or {}
     if store.get_month(ym) is None:
-        store.create_month(ym)
+        # Silently creating one here produced a month holding an assignment but
+        # no roster: the admin froze it, and every intern was told they had no
+        # schedule because none of them were in it.
+        return jsonify(error=f"החודש {ym_label(ym)} לא קיים. צרו אותו בלשונית «חודשים» לפני יצירת שיבוץ."), 404
     store.patch_month(ym, assignment=b.get("assignments") or [],
                       stats=b.get("stats") or "", generated_at=store.now())
     if b.get("xlsx"):
@@ -358,6 +361,8 @@ def api_freeze(ym):
     want = bool((request.get_json(silent=True) or {}).get("frozen", True))
     if want and not m["assignment"]:
         return jsonify(error="אין שיבוץ להקפיא — יש ליצור שיבוץ קודם"), 400
+    if want and not m["interns"]:
+        return jsonify(error="אין מתמחים בחודש הזה — אף אחד לא יראה את הלוח"), 400
     store.set_status(ym, "frozen" if want else "draft")
     store.log("admin", "freeze" if want else "unfreeze", ym)
     return jsonify(ok=True, month=store.month_meta(ym))

@@ -298,10 +298,23 @@
 </div>
 
 <div class="view ext-wrap" id="view-generate" hidden>
-  <div class="ext-intro" style="max-width:640px">
-    השיבוץ מיוצר על ידי שרת שמריץ את <code>monthly_scheduler.py</code>. יש לפרוס את השרת פעם אחת (ראו קובץ README שצורף), להדביק כאן את הכתובת שלו, ואז ליצור שיבוצים ישירות מהדפדפן ללא הורדה/העלאה ידנית של קבצים.
-  </div>
   <div class="card" style="max-width:640px">
+    <h3>החודש שישובץ</h3>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <span id="genMonthLabel" style="font-size:19px;font-weight:700;color:var(--navy)">—</span>
+      <span id="genMonthState"></span>
+      <span class="spacer" style="flex:1"></span>
+      <button class="btn" id="genGoMonths" style="padding:5px 12px;font-size:12.5px">החלפת חודש</button>
+    </div>
+    <div class="hint" style="margin-top:8px">
+      השיבוץ נוצר תמיד עבור החודש הנבחר, ונשמר אליו בארכיון. להחלפה — לשונית «חודשים».
+    </div>
+    <!-- kept in sync with the selected month; never typed in by hand -->
+    <input id="genYear" type="hidden" value="2026">
+    <input id="genMonth" type="hidden" value="7">
+  </div>
+
+  <div class="card" id="serverCard" style="max-width:640px;display:none">
     <h3>הגדרות שרת</h3>
     <div class="grid-fields">
       <div class="field"><label>כתובת השרת (Backend URL)</label>
@@ -310,10 +323,8 @@
       <div class="field"><label>סיסמת שרת</label>
         <input id="genPassword" type="password" placeholder="הסיסמה שהוגדרה ב-APP_PASSWORD">
       </div>
-      <div class="field"><label>שנה</label><input id="genYear" type="number" value="2026"></div>
-      <div class="field"><label>חודש</label><input id="genMonth" type="number" min="1" max="12" value="7"></div>
     </div>
-    <div class="hint" style="margin-top:8px">הכתובת והסיסמה נשמרות בדפדפן שלך (localStorage בעמוד זה בלבד) כדי שלא תצטרך להזין אותן שוב.</div>
+    <div class="hint" style="margin-top:8px">נדרש רק כשפותחים את הקובץ הזה ישירות מהדיסק. כשהעורך מוגש מהשרת — הכתובת מזוהה לבד.</div>
   </div>
   <div class="card" style="max-width:640px">
     <h3>הרפיית אילוצים (אופציונלי)</h3>
@@ -1799,14 +1810,34 @@ async function srvApi(path, opts={}){
 }
 
 function paintMonthChip(){
-  const chip=$("#monthChip"); if(!chip) return;
-  if(!CUR_YM){ chip.textContent=""; chip.style.display="none"; return; }
-  chip.style.display="";
-  chip.textContent = ymLabel(CUR_YM) + (isFrozen()?" · 🔒 מוקפא":"");
-  chip.style.background = isFrozen()?"#5a4b16":"#16294d";
-  chip.style.color = isFrozen()?"#ffe9a8":"#cfe0ff";
+  const chip=$("#monthChip");
+  if(chip){
+    if(!CUR_YM){ chip.textContent=""; chip.style.display="none"; }
+    else{
+      chip.style.display="";
+      chip.textContent = ymLabel(CUR_YM) + (isFrozen()?" · 🔒 מוקפא":"");
+      chip.style.background = isFrozen()?"#5a4b16":"#16294d";
+      chip.style.color = isFrozen()?"#ffe9a8":"#cfe0ff";
+    }
+  }
   const fb=$("#freezeBtn");
   if(fb) fb.textContent = isFrozen()?"ביטול הקפאה":"🔒 הקפאת השיבוץ";
+
+  // the generate tab must target the selected month — never a separately typed one
+  if(CUR_YM){
+    const [y,m]=CUR_YM.split("-").map(Number);
+    const gy=$("#genYear"), gm=$("#genMonth");
+    if(gy) gy.value=y;
+    if(gm) gm.value=m;
+    const lab=$("#genMonthLabel"); if(lab) lab.textContent=ymLabel(CUR_YM);
+    const stt=$("#genMonthState");
+    if(stt) stt.innerHTML = isFrozen()
+      ? '<span style="background:#EFEFEF;color:#1F3864;font-weight:700;padding:3px 11px;border-radius:20px">🔒 מוקפא — יש לבטל הקפאה לפני הרצה</span>'
+      : '<span style="background:#E7ECF6;color:#2E5496;font-weight:700;padding:3px 11px;border-radius:20px">טיוטה</span>';
+  }
+  // server settings are only relevant when this file is opened from disk
+  const sc=$("#serverCard");
+  if(sc) sc.style.display = (location.protocol==="file:") ? "" : "none";
 }
 
 async function refreshMonths(){
@@ -1902,6 +1933,9 @@ async function renderCodes(){
   }catch(e){ box.innerHTML=""; }
 }
 
+const _goMonths=$("#genGoMonths");
+if(_goMonths) _goMonths.onclick=()=>showTab("months");
+
 $("#newMonthBtn").onclick=async()=>{
   const d=new Date(); d.setMonth(d.getMonth()+1);
   const def=d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");
@@ -1944,7 +1978,14 @@ $("#freezeBtn").onclick=async()=>{
 /* archive every successful run, so the month keeps its result */
 async function archiveResult(data){
   if(!CUR_YM) return;
-  const ym = String(data.year)+"-"+String(data.month).padStart(2,"0");
+  const ym = CUR_YM;                       // the selected month is the only target
+  const ran = String(data.year)+"-"+String(data.month).padStart(2,"0");
+  if(ran !== ym){
+    // would have written the result into a different month record than the one
+    // being edited — the cause of "no schedule" in the portal
+    toast("השיבוץ רץ עבור "+ymLabel(ran)+" אבל החודש הנבחר הוא "+ymLabel(ym)+" — לא נשמר",true);
+    return;
+  }
   try{
     await srvApi("/api/months/"+ym+"/assignment",{method:"POST",body:{
       assignments:data.assignments, stats:data.stats||"", xlsx:data.xlsx||null}});
