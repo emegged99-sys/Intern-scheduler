@@ -31,11 +31,19 @@ dir app.py
 ### 3. התקנת החבילות
 
 ```powershell
-python -m pip install -r requirements.txt
+python -m pip install flask flask-cors openpyxl
 ```
 
-לוקח דקה. אם `python` לא מוכר, התקינו מ-[python.org](https://python.org)
-ובמסך ההתקנה **סמנו "Add Python to PATH"**.
+**לא** להריץ `pip install -r requirements.txt` על Windows: הקובץ הזה מיועד
+לשרת ומכיל שתי חבילות שיפילו את ההתקנה כאן —
+`gunicorn` (שרת ל-Linux בלבד) ו-`psycopg` (נחוץ רק כשעובדים מול Postgres בענן,
+ולגרסאות פייתון חדשות מאוד לא תמיד יש לו wheel מוכן). אם ההתקנה נופלת על
+אחת מהן, שום דבר לא מותקן — כולל flask.
+
+שלוש החבילות למעלה זה כל מה שצריך להרצה מקומית.
+
+אם `python` לא מוכר, התקינו מ-[python.org](https://python.org) ובמסך ההתקנה
+**סמנו "Add Python to PATH"**.
 
 ### 4. הפעלה
 
@@ -165,6 +173,8 @@ https://<השירות>.onrender.com/portal/
 |---|---|
 | `export : The term 'export' is not recognized` | זו תחביר של Linux. ב-PowerShell: `$env:APP_PASSWORD='...'` |
 | `python : command not found` | פייתון לא מותקן או לא ב-PATH. התקנה מחדש עם "Add Python to PATH" |
+| `ModuleNotFoundError: No module named 'flask'` | סעיף 3 לא רץ או נפל. הריצו `python -m pip install flask flask-cors openpyxl` |
+| ההתקנה נופלת על `gunicorn` או `psycopg` | הרצתם `-r requirements.txt`. על Windows מתקינים רק את שלוש החבילות שבסעיף 3 |
 | `dir app.py` מחזיר שגיאה | אתם בתיקייה הלא נכונה — חפשו את התיקייה שבה יושבים `app.py` ו-`monthly_scheduler.py` |
 | הדפדפן מראה 401 | הסיסמה בעורך לא תואמת ל-`APP_PASSWORD`, או נשמרה עם רווח |
 | לשונית **חודשים** לא מופיעה | פתחתם את הקובץ הישן. חלצו מחדש, או עדכנו את Netlify |
