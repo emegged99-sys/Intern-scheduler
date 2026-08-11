@@ -346,8 +346,13 @@ async function boot(){
   catch(e){ return renderSignIn(); }
   S.name=me.name; S.months=me.months;
   if(!S.months.length){
-    shell(`<div class="card"><div class="empty">עוד לא נפתח עבורכם חודש שיבוץ.<br>
-      כשרכז/ת השיבוץ יפתח/תפתח חודש, הוא יופיע כאן.</div></div>`);
+    shell(me.otherMonths
+      ? `<div class="notice bad" style="margin-bottom:0"><span>⚠</span><span>
+          <b>אינכם מופיעים ברשימת המתמחים של החודש שפורסם</b>
+          יש לוח מפורסם, אבל השם שלכם לא נכלל בו. פנו לרכז/ת השיבוץ — כנראה
+          רשימת המתמחים לא נשמרה לשרת לפני יצירת השיבוץ.</span></div>`
+      : `<div class="card"><div class="empty">עוד לא נפתח עבורכם חודש שיבוץ.<br>
+          כשרכז/ת השיבוץ יפתח/תפתח חודש, הוא יופיע כאן.</div></div>`);
     return;
   }
   S.ym = (S.months.find(m=>m.canEdit) || S.months[0]).ym;

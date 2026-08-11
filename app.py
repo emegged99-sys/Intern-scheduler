@@ -622,15 +622,19 @@ def _visible(m):
 @portal_auth
 def portal_me():
     who = _who()
-    months = []
+    months, skipped = [], 0
     for meta in store.list_months():
         m = store.get_month(meta["ym"])
         if not any((it.get("id") == who["intern_id"]) for it in m["interns"]):
+            # a month this intern is not part of. Counted so the portal can say
+            # "ask the coordinator" instead of implying nothing exists at all.
+            if m["status"] == "frozen" or m["assignment"]:
+                skipped += 1
             continue
         months.append({"ym": m["ym"], "label": ym_label(m["ym"]), "status": m["status"],
                        "canEdit": m["status"] != "frozen",
                        "published": _visible(m) and bool(m["assignment"])})
-    return jsonify(name=who["name"], months=months)
+    return jsonify(name=who["name"], months=months, otherMonths=skipped)
 
 
 @app.get("/api/portal/months/<ym>")
