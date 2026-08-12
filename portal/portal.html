@@ -120,6 +120,17 @@
     box-shadow:inset 0 0 0 1px var(--mine-line)}
   table.sched td.ext{background:var(--mid-bg); color:#7A5300; font-size:12px}
 
+  .tabs{display:flex; gap:6px; padding:0 18px 10px; background:var(--navy)}
+  .ptab{flex:1; border:none; background:#16294D; color:#AEBBD6; padding:11px 10px;
+    border-radius:10px 10px 0 0; font-weight:700; font-size:14px; position:relative;
+    display:flex; align-items:center; justify-content:center; gap:7px}
+  .ptab.active{background:var(--page); color:var(--navy)}
+  .ptab .lockdot{font-size:12px; opacity:.85}
+  .ptab.pending{color:#8A97B4}
+  .ptab .badge{font-size:11px; font-weight:700; background:var(--mine); color:#fff;
+    border-radius:20px; padding:1px 8px; min-width:20px}
+  .ptab.active .badge{background:var(--mine)}
+
   .toast{position:fixed; inset-block-end:22px; inset-inline:0; margin:auto; width:max-content;
     max-width:90%; background:var(--navy); color:#fff; padding:11px 18px; border-radius:10px;
     opacity:0; transform:translateY(8px); transition:.2s; pointer-events:none; z-index:60; font-size:13.5px}
@@ -138,7 +149,7 @@ const ST_HE = Object.fromEntries(ST);
 const DOW_HEAD = ["א","ב","ג","ד","ה","ו","ש"];
 const $ = s => document.querySelector(s);
 const app = () => $("#app");
-let S = { name:null, months:[], ym:null, d:null, dirty:false };
+let S = { name:null, months:[], ym:null, d:null, dirty:false, tab:"dates" };
 
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c =>
   ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -180,8 +191,19 @@ function renderSignIn(err){
 }
 
 /* ------------------------------------------------------------ shell ----- */
-function shell(inner){
-  const opts=S.months.map(m=>`<option value="${m.ym}" ${m.ym===S.ym?"selected":""}>${esc(m.label)}</option>`).join("");
+function shell(inner, tabs){
+  const opts=S.months.map(m=>`<option value="${m.ym}" ${m.ym===S.ym?"selected":""}>${
+      esc(m.label)}${m.published?" 🔒":" ✎"}</option>`).join("");
+  const published = !!(S.d && S.d.schedule);
+  const nShifts = S.d && S.d.myShifts ? S.d.myShifts.length : 0;
+  const tabBar = tabs ? `
+    <div class="tabs">
+      <button class="ptab ${S.tab==="dates"?"active":""}" data-ptab="dates">הימים שלי</button>
+      <button class="ptab ${S.tab==="shifts"?"active":""} ${published?"":"pending"}" data-ptab="shifts">
+        התורנויות שלי
+        ${published ? `<span class="badge">${nShifts}</span>` : `<span class="lockdot">🔒</span>`}
+      </button>
+    </div>` : "";
   app().innerHTML=`
     <header class="bar">
       <h1>התורנויות שלי</h1><span class="who">${esc(S.name||"")}</span>
@@ -189,10 +211,15 @@ function shell(inner){
       ${S.months.length?`<select class="month" id="ymSel">${opts}</select>`:""}
       <button class="btn ghost" id="out">יציאה</button>
     </header>
+    ${tabBar}
     <div class="wrap">${inner}</div>`;
   const sel=$("#ymSel");
   if(sel) sel.onchange=()=>{ S.ym=sel.value; loadMonth(); };
   $("#out").onclick=async()=>{ await api("/api/portal/logout",{method:"POST"}); boot(); };
+  document.querySelectorAll("[data-ptab]").forEach(b=>b.onclick=()=>{
+    if(S.dirty && S.tab==="dates" && !confirm("יש שינויים שלא נשמרו. לעבור בכל זאת?")) return;
+    S.tab=b.dataset.ptab; renderMonth();
+  });
 }
 
 function stateNotice(m){
@@ -302,9 +329,17 @@ function sectionMine(d){
     <div class="ribbon">${rows}</div></div>`;
 }
 
-function sectionPending(){
-  return `<div class="card"><h2>התורנויות שלי</h2>
-    <div class="empty">הלוח עוד לא פורסם. הוא יופיע כאן ברגע שרכז/ת השיבוץ יקפיא/תקפיא את החודש.</div></div>`;
+function sectionPending(d){
+  const n = d.me.blocked.length + d.me.preferred.length;
+  return `<div class="card">
+    <h2>הלוח עוד לא פורסם</h2>
+    <p class="lede">התורנויות שלכם ל${esc(d.month.label)} יופיעו כאן ברגע שרכז/ת
+      השיבוץ תסגור את השיבוץ. עד אז אפשר להמשיך לעדכן את הימים שלכם.</p>
+    <div class="notice info" style="margin:0 0 14px"><span>🔒</span><span>
+      ${n ? `סימנתם ${n} ימים. אפשר לשנות אותם עד לפרסום.`
+          : "עוד לא סימנתם ימים. כדאי לעשות זאת לפני שהשיבוץ ייסגר."}</span></div>
+    <button class="btn go" id="goDates">לעדכון הימים שלי ←</button>
+  </div>`;
 }
 
 /* ------------------------------------------------------- full table ----- */
@@ -329,15 +364,24 @@ function sectionTable(d){
 /* ------------------------------------------------------------- boot ----- */
 function renderMonth(){
   const d=S.d;
-  shell(stateNotice(d.month) + sectionDates(d)
-        + (d.schedule ? sectionMine(d) : sectionPending())
-        + (d.schedule ? sectionTable(d) : ""));
+  if(S.tab==="shifts"){
+    shell(d.schedule ? (sectionMine(d) + sectionTable(d)) : sectionPending(d), true);
+    const g=$("#goDates");
+    if(g) g.onclick=()=>{ S.tab="dates"; renderMonth(); };
+    return;
+  }
+  shell(stateNotice(d.month) + sectionDates(d), true);
   wireDates();
 }
 
 async function loadMonth(){
-  try{ S.d=await api(`/api/portal/months/${S.ym}`); S.dirty=false; renderMonth(); }
-  catch(e){ toast(e.message,true); }
+  try{
+    S.d=await api(`/api/portal/months/${S.ym}`);
+    S.dirty=false;
+    // published: the schedule is what they came for. Still open: their days are.
+    S.tab = S.d.schedule ? "shifts" : "dates";
+    renderMonth();
+  }catch(e){ toast(e.message,true); }
 }
 
 async function boot(){
@@ -355,6 +399,7 @@ async function boot(){
           כשרכז/ת השיבוץ יפתח/תפתח חודש, הוא יופיע כאן.</div></div>`);
     return;
   }
+  // a month still accepting dates is time-sensitive; a published one is not
   S.ym = (S.months.find(m=>m.canEdit) || S.months[0]).ym;
   await loadMonth();
 }
