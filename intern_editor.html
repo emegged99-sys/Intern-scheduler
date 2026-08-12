@@ -772,6 +772,7 @@ function setSyncStatus(state, msg){
 
 let _saveTimer = null;
 let _savingToServer = false;
+let _saveError = null;
 let _serverLoadComplete = false;   // block saves until first server load finishes
 let _lastServerHash = null;        // detect if server has changed since we last saw it
 
@@ -804,6 +805,37 @@ function _authHeaders(){
 }
 
 
+/* ---- the month is frozen and that is what blocks saving ---- */
+function offerUnfreeze(msg){
+  if(document.getElementById("unfreezeBanner")) return;
+  const d=document.createElement("div");
+  d.id="unfreezeBanner";
+  d.style.cssText="position:fixed;inset-block-start:0;inset-inline:0;z-index:160;background:#EDF0F6;"+
+    "border-bottom:2px solid #8194b8;padding:12px 20px;display:flex;align-items:center;gap:14px;"+
+    "flex-wrap:wrap;box-shadow:0 4px 16px rgba(0,0,0,.12)";
+  d.innerHTML=`<div style="flex:1;min-width:260px;font-size:13.5px;color:#1F3864">
+      <b style="display:block;margin-bottom:2px">🔒 ${escapeHtml(ymLabel(CUR_YM||"2026-01"))} מוקפא</b>
+      ${escapeHtml(msg||"")} כדי לערוך או להעלות נתונים יש לבטל את ההקפאה.
+    </div>
+    <button id="unfreezeGo" class="btn primary">ביטול הקפאה</button>
+    <button id="unfreezeSkip" class="btn">התעלם</button>`;
+  document.body.appendChild(d);
+  document.getElementById("unfreezeSkip").onclick=()=>d.remove();
+  document.getElementById("unfreezeGo").onclick=async()=>{
+    const btn=document.getElementById("unfreezeGo");
+    btn.disabled=true; btn.textContent="מבטל…";
+    try{
+      await srvApi("/api/months/"+CUR_YM+"/freeze",{method:"POST",body:{frozen:false}});
+      await refreshMonths();
+      d.remove();
+      toast("ההקפאה בוטלה — אפשר לשמור עכשיו");
+    }catch(e){
+      btn.disabled=false; btn.textContent="ביטול הקפאה";
+      toast(e.message,true);
+    }
+  };
+}
+
 /* ---- recover from an empty server month ---- */
 function offerUpload(n){
   if(document.getElementById("uploadBanner")) return;
@@ -826,12 +858,14 @@ function offerUpload(n){
     btn.disabled=true; btn.textContent="מעלה…";
     try{
       _lastServerHash=null;              // we intend to overwrite the empty state
+      _saveError=null;
       await saveToServer();
+      if(_saveError) throw new Error(_saveError);
       await refreshMonths();
       d.remove();
       toast("הנתונים הועלו לשרת");
     }catch(e){
-      btn.disabled=false; btn.textContent="העלאת הנתונים לשרת";
+      btn.disabled=false; btn.textContent="נסו שוב";
       toast("ההעלאה נכשלה: "+e.message,true);
     }
   };
@@ -937,7 +971,15 @@ async function saveToServer(){
       fetch(backend+"/api/state/holidays",{method:"POST",headers,body:JSON.stringify(hols)}),
     ]);
     const failed = results.find(r=>!r.ok);
-    if(failed){ setSyncStatus("error", `שגיאה ${failed.status}`); }
+    if(failed){
+      // A bare status code hid the real cause (409 = the month is frozen), so
+      // read the server's explanation and act on it.
+      let why = `שגיאה ${failed.status}`;
+      try{ const j = await failed.json(); if(j && j.error) why = j.error; }catch(e){}
+      setSyncStatus("error", why);
+      if(failed.status === 409) offerUnfreeze(why);
+      _saveError = why;
+    }
     else {
       // update our known-server-hash to what we just wrote
       _lastServerHash = JSON.stringify(interns).length + "|" +
@@ -946,7 +988,10 @@ async function saveToServer(){
       setSyncStatus("saved");
     }
   }catch(e){
-    setSyncStatus("error", "אין חיבור לשרת");
+    // only a genuine network/parse failure reaches here; a refusal by the
+    // server has already been reported with its own message
+    _saveError = "אין חיבור לשרת";
+    setSyncStatus("error", _saveError);
   }
   finally{ _savingToServer = false; }
 }
@@ -1761,8 +1806,21 @@ $("#restoreInput").onchange = e=>{
       if(backup.ext) ext = backup.ext;
       if(backup.hols) hols = backup.hols;
       selId = interns.length ? interns[0].id : null;
-      renderAll(); // also triggers saveState → server sync
-      toast(`שוחזר גיבוי: ${interns.length} מתמחים`);
+      renderAll();
+      // Push now rather than waiting for the debounced save: a restore is
+      // exactly when the server copy is the one that is wrong.
+      (async()=>{
+        clearTimeout(_saveTimer);
+        _saveError = null;
+        _lastServerHash = null;                 // the local copy is authoritative here
+        await saveToServer();
+        if(_saveError){
+          toast(`שוחזרו ${interns.length} מתמחים בדפדפן, אבל ההעלאה לשרת נכשלה: ${_saveError}`, true);
+        }else{
+          await refreshMonths();
+          toast(`שוחזר גיבוי: ${interns.length} מתמחים — נשמר בשרת`);
+        }
+      })();
     }catch(err){
       toast("שגיאה בקריאת קובץ הגיבוי");
     }
@@ -1885,6 +1943,9 @@ async function refreshMonths(){
   const cur=MONTH_LIST.find(m=>m.ym===CUR_YM);
   CUR_STATUS=cur?cur.status:"draft";
   paintMonthChip();
+  // The browser holding a roster the server does not is the failure mode that
+  // silently produces an unusable schedule. Surface it whenever we notice.
+  if(cur && !cur.interns && interns && interns.length) offerUpload(interns.length);
   return j;
 }
 
@@ -1901,7 +1962,10 @@ function renderMonths(){
               ?'<span style="background:#EFEFEF;color:#1F3864;font-weight:700;padding:2px 10px;border-radius:20px">🔒 מוקפא</span>'
               :'<span style="background:#E7ECF6;color:#2E5496;font-weight:700;padding:2px 10px;border-radius:20px">טיוטה</span>'}</td>
         <td>${m.interns ? m.interns
-              : '<span style="color:var(--weak);font-weight:700" title="אף מתמחה לא ישויך לשיבוץ הזה">0 ⚠</span>'}</td>
+              : '<span style="color:var(--weak);font-weight:700" title="אף מתמחה לא ישויך לשיבוץ הזה">0 ⚠</span>'}
+            ${(!m.interns && m.ym===CUR_YM && interns && interns.length)
+              ? `<button class="btn" data-fix="${m.ym}" style="padding:3px 9px;font-size:11.5px;margin-inline-start:6px">העלאת ${interns.length} מתמחים</button>`
+              : ""}</td>
         <td>${m.assigned||"—"}</td>
         <td style="font-size:12px;color:var(--muted)">${m.updatedAt||""}</td>
         <td>
@@ -1910,6 +1974,17 @@ function renderMonths(){
           ${m.hasXlsx?`<button class="btn" data-xlsx="${m.ym}" style="padding:4px 10px;font-size:12px">אקסל</button>`:""}
         </td></tr>`).join("")}
       </tbody></table>`;
+    box.querySelectorAll("[data-fix]").forEach(b=>b.onclick=async()=>{
+      b.disabled=true; b.textContent="מעלה…";
+      try{
+        clearTimeout(_saveTimer);
+        _saveError=null; _lastServerHash=null;
+        await saveToServer();
+        if(_saveError) throw new Error(_saveError);
+        toast("הנתונים הועלו לשרת");
+        renderMonths();
+      }catch(e){ b.disabled=false; b.textContent="נסו שוב"; toast(e.message,true); }
+    });
     box.querySelectorAll("[data-sel]").forEach(b=>b.onclick=()=>selectMonth(b.dataset.sel));
     box.querySelectorAll("[data-open]").forEach(b=>b.onclick=()=>openArchived(b.dataset.open));
     box.querySelectorAll("[data-xlsx]").forEach(b=>b.onclick=()=>downloadArchivedXlsx(b.dataset.xlsx));
