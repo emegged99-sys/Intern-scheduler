@@ -554,15 +554,16 @@ def generate():
                         crash_msg = line
                         break
 
-        if has_hard_failure or has_empty_slots:
+        # A crash leaves us with nothing. Unfilled slots do not: the solver still
+        # produced its best attempt, and that partial schedule is exactly what
+        # shows which constraint has to give. Returning only an error message
+        # threw away the most useful artefact of the run.
+        if has_hard_failure:
             log = stdout[-3000:] + "\n" + stderr[-3000:]
             if crash_msg:
                 err_msg = f"תקלה בסקדולר: {crash_msg}"
             elif diagnostics:
-                reason = " · ".join(diagnostics)
-                err_msg = f"השיבוץ נכשל: {reason}"
-            elif has_empty_slots:
-                err_msg = "השיבוץ נכשל: לא ניתן היה למלא את כל המשבצות בהינתן האילוצים"
+                err_msg = "השיבוץ נכשל: " + " · ".join(diagnostics)
             else:
                 err_msg = "השיבוץ נכשל"
             return jsonify(error=err_msg, diagnostics=diagnostics, log=log), 500
@@ -580,6 +581,22 @@ def generate():
                         "name": row["name"],
                     })
 
+        # Which slots came back empty? Everything the interns were meant to
+        # cover, minus what the solver filled and what external staff cover.
+        filled = {(a["day"], a["station"]) for a in assignments}
+        covered = set()
+        for key in ext_data:
+            try:
+                d, st = key.split("|")
+                covered.add((int(d), st))
+            except ValueError:
+                continue
+        ndays = calendar.monthrange(int(year), int(month))[1]
+        gaps = [{"day": d, "station": st, "stationHe": STATION_HE.get(st, st)}
+                for d in range(1, ndays + 1)
+                for st in ["er1", "er2", "nicu1", "nicu2", "ward", "picu"]
+                if (d, st) not in filled and (d, st) not in covered]
+
         # read xlsx as base64
         with open(out_path, "rb") as xf:
             xlsx_b64 = base64.b64encode(xf.read()).decode("ascii")
@@ -596,6 +613,9 @@ def generate():
             assignments=assignments,
             external=ext_data,
             xlsx=xlsx_b64,
+            partial=bool(gaps),
+            gaps=gaps,
+            diagnostics=diagnostics,
             year=int(year),
             month=int(month),
             stats=stats_line,

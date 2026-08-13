@@ -137,6 +137,8 @@
   /* interactive results cells */
   .res-cell{cursor:pointer; position:relative; min-width:70px}
   .res-cell:hover{box-shadow:0 0 0 2px var(--blue) inset}
+  .res-cell.gap{background:#FDECE7; color:#C0392B; font-weight:700;
+    box-shadow:inset 0 0 0 2px #E8A98A}
   .res-cell.locked{background:#D6E0F0 !important; font-weight:700}
   .res-cell.locked::before{content:"🔒 "; font-size:10px}
   .res-cell.removed{background:#F8CBAD !important; text-decoration:line-through; color:#999}
@@ -1354,6 +1356,7 @@ $("#relaxPair").addEventListener("change", e => localStorage.setItem("relaxPair"
 $("#relaxCross").addEventListener("change", e => localStorage.setItem("relaxCross", e.target.checked ? "1" : "0"));
 
 let lastXlsxB64 = null;
+let lastGaps = [];
 let lastYear = 2026, lastMonth = 7;
 let editGrid = {};      // "day|station" -> {id, name} or null
 let editLocks = {};     // "day|station" -> true
@@ -1389,9 +1392,35 @@ function renderResults(data, switchToTab){
   rebuildResultsTable();
 
   // stats banner
+  const gaps = data.gaps || [];
+  lastGaps = gaps;
   const statsDiv = $("#resStats");
+  let gapHtml = "";
+  if(gaps.length){
+    // group by station: one station short on many days is a different problem
+    // from scattered holes, and the fix is different too
+    const byStation = {};
+    gaps.forEach(g=>{ (byStation[g.stationHe] = byStation[g.stationHe] || []).push(g.day); });
+    const rows = Object.entries(byStation)
+      .sort((a,b)=>b[1].length-a[1].length)
+      .map(([st,days])=>`<li style="margin-bottom:4px"><b>${escapeHtml(st)}</b> —
+          ${days.length} ימים: ${days.join(", ")}</li>`).join("");
+    const diag = (data.diagnostics||[]).map(d=>`<li>${escapeHtml(d)}</li>`).join("");
+    gapHtml = `
+      <div class="card" style="max-width:100%;border-color:#E8A98A;background:#FDECE7">
+        <h3 style="color:#8E2A1D">שיבוץ חלקי — ${gaps.length} משבצות לא אוישו</h3>
+        <p style="margin:0 0 10px;font-size:13px;color:#8E2A1D">
+          התוצאה מוצגת עם הפערים כדי שתוכלו לראות איפה בדיוק חסר. המשבצות
+          החסרות מסומנות בטבלה. אפשר למלא אותן ידנית, לשנות אילוצים ולהריץ שוב,
+          או לכסות אותן בתורני חוץ.</p>
+        <ul style="margin:0;padding-inline-start:20px;font-size:13px;color:#8E2A1D">${rows}</ul>
+        ${diag ? `<p style="margin:10px 0 4px;font-weight:700;font-size:13px;color:#8E2A1D">סיבות אפשריות:</p>
+                  <ul style="margin:0;padding-inline-start:20px;font-size:13px;color:#8E2A1D">${diag}</ul>` : ""}
+      </div>`;
+  }
   statsDiv.innerHTML = `<div class="card" style="max-width:100%"><h3>תוצאות שיבוץ — ${month}/${year}</h3>
-    <p style="margin:0;color:var(--muted);font-size:13px">${stats ? escapeHtml(stats) : 'השיבוץ הושלם.'}</p></div>`;
+    <p style="margin:0;color:var(--muted);font-size:13px">${stats ? escapeHtml(stats) : 'השיבוץ הושלם.'}</p></div>`
+    + gapHtml;
 
   rebuildSummary();
   updateEditBar();
@@ -1429,8 +1458,12 @@ function rebuildResultsTable(){
         if(locked) cls += " locked";
         else if(removed) cls += " removed";
         else if(changed) cls += " changed";
-        const name = removed ? (orig ? orig.name : "—") : (v ? v.name : "—");
-        html += `<td class="${cls}" data-d="${d}" data-st="${st}" style="text-align:center">${escapeHtml(name)}</td>`;
+        // never filled by the solver, and not covered externally: a real hole
+        const isGap = !v && !orig && !removed;
+        if(isGap) cls += " gap";
+        const name = removed ? (orig ? orig.name : "—") : (v ? v.name : (isGap ? "חסר" : "—"));
+        html += `<td class="${cls}" data-d="${d}" data-st="${st}" style="text-align:center"${
+          isGap?' title="לא אויש — לחצו כדי לשבץ ידנית"':''}>${escapeHtml(name)}</td>`;
       }
     }
     html += `</tr>`;
@@ -2219,6 +2252,10 @@ $("#freezeBtn").onclick=async()=>{
     if(cur && !cur.interns){
       toast("בחודש הזה אין מתמחים בשרת — העלו נתונים לפני הקפאה",true);
       return;
+    }
+    if(lastGaps && lastGaps.length && CUR_YM===`${lastYear}-${String(lastMonth).padStart(2,"0")}`){
+      if(!confirm("שימו לב: בשיבוץ הזה "+lastGaps.length+" משבצות לא אוישו.\n\n"+
+        "אם תקפיאו עכשיו, המתמחים יראו לוח עם חורים.\nלהמשיך בכל זאת?")) return;
     }
     if(!confirm("להקפיא ולפרסם את "+ymLabel(CUR_YM)+"?\n\n"+
       "• השיבוץ יוקפא — עריכה והרצה מחדש ייחסמו\n"+
