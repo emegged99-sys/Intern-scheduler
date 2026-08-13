@@ -251,7 +251,9 @@ def get_state(key):
     ym = request.args.get("ym") or current_ym()
     m = store.get_month(ym)
     return jsonify(data=(m or {}).get(key), ym=ym,
-                   status=(m or {}).get("status", "draft"))
+                   status=(m or {}).get("status", "draft"),
+                   version=(m or {}).get("version", 0),
+                   lease=(m or {}).get("lease"))
 
 
 @app.post("/api/state/<key>")
@@ -264,9 +266,53 @@ def save_state(key):
         return jsonify(error=f"החודש {ym_label(ym)} מוקפא — יש לבטל את ההקפאה כדי לערוך"), 409
     if store.get_month(ym) is None:
         store.create_month(ym)
+
+    # Optimistic concurrency. A browser tells us which version it read; if the
+    # month has moved on since, someone else has written and this request would
+    # silently erase their work. A lease alone cannot prevent that — a browser
+    # may have loaded its copy long before any lease existed.
+    base = request.args.get("version")
+    who = request.headers.get("X-Client-Id", "")
+    cur = store.version_of(ym)
+    if base not in (None, "") and int(base) != cur:
+        m = store.get_month(ym)
+        return jsonify(error="הנתונים בשרת השתנו בינתיים", conflict=True,
+                       serverVersion=cur, yourVersion=int(base),
+                       data={"interns": m["interns"], "external": m["external"],
+                             "holidays": m["holidays"]}), 409
+
+    held = (store.get_month(ym) or {}).get("lease")
+    if held and who and held["by"] != who:
+        return jsonify(error=f"{held.get('name') or 'משתמש אחר'} עורך את החודש הזה כרגע",
+                       locked=True, holder=held), 423
+
     store.patch_month(ym, **{key: request.get_json()})
     store.log("admin", f"edit_{key}", ym)
-    return jsonify(ok=True, ym=ym)
+    return jsonify(ok=True, ym=ym, version=store.version_of(ym))
+
+
+@app.get("/api/versions")
+@require_auth
+def api_versions():
+    """Polled by open editors to notice another browser's changes."""
+    return jsonify(versions=store.versions(), current=current_ym())
+
+
+@app.post("/api/months/<ym>/lease")
+@require_auth
+def api_lease(ym):
+    b = request.get_json(silent=True) or {}
+    who = request.headers.get("X-Client-Id") or b.get("clientId") or ""
+    if not who:
+        return jsonify(error="חסר מזהה דפדפן"), 400
+    if b.get("release"):
+        store.drop_lease(ym, who)
+        return jsonify(ok=True, released=True)
+    ok, holder = store.take_lease(ym, who, b.get("name") or "")
+    if not ok:
+        return jsonify(ok=False, error=f"{holder.get('name') or 'משתמש אחר'} עורך כרגע",
+                       holder=holder), 423
+    return jsonify(ok=True, lease=holder, version=store.version_of(ym))
 
 
 # =====================================================================

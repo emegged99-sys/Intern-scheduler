@@ -805,6 +805,144 @@ function _authHeaders(){
 }
 
 
+
+/* ================= multi-browser safety =================
+   Two editors open at once used to overwrite each other silently. Correctness
+   rests on a version number: we remember which version we loaded, and the
+   server refuses a write based on a stale one. The lease on top is advisory —
+   it warns the second person early instead of at save time. */
+const CLIENT_ID = (()=>{
+  let v=localStorage.getItem("schedulerClientId");
+  if(!v){ v = Math.random().toString(36).slice(2)+Date.now().toString(36);
+          localStorage.setItem("schedulerClientId", v); }
+  return v;
+})();
+const CLIENT_NAME = localStorage.getItem("schedulerClientName") || "";
+let MY_VERSION = null;        // the month version this browser is editing
+let _pollTimer = null;
+let _leaseTimer = null;
+let _holder = null;           // someone else is editing
+
+function _idHeaders(h){ h=h||{}; h["X-Client-Id"]=CLIENT_ID; return h; }
+
+function hasUnsaved(){ return _savingToServer || _saveTimer; }
+
+/* ---- take/renew the lease while actively editing ---- */
+async function holdLease(){
+  if(!CUR_YM) return true;
+  try{
+    const r = await fetch(_backend()+"/api/months/"+CUR_YM+"/lease",
+      {method:"POST", headers:_idHeaders(_authHeaders()),
+       body:JSON.stringify({name:CLIENT_NAME})});
+    if(r.status===423){
+      const j=await r.json();
+      showHolder(j.holder);
+      return false;
+    }
+    _holder=null; hideHolder();
+    return true;
+  }catch(e){ return true; }   // never block editing on a lease failure
+}
+function startLeaseRenewal(){
+  clearInterval(_leaseTimer);
+  _leaseTimer = setInterval(()=>{ if(hasUnsaved()) holdLease(); }, 20000);
+}
+async function releaseLease(){
+  if(!CUR_YM) return;
+  try{
+    await fetch(_backend()+"/api/months/"+CUR_YM+"/lease",
+      {method:"POST", headers:_idHeaders(_authHeaders()),
+       body:JSON.stringify({release:true})});
+  }catch(e){}
+}
+
+function showHolder(h){
+  _holder=h;
+  let el=document.getElementById("holderBar");
+  if(!el){
+    el=document.createElement("div"); el.id="holderBar";
+    el.style.cssText="position:fixed;inset-block-start:0;inset-inline:0;z-index:170;"+
+      "background:#FDECE7;border-bottom:2px solid #E8A98A;padding:10px 20px;"+
+      "font-size:13.5px;color:#8E2A1D;display:flex;gap:12px;align-items:center;flex-wrap:wrap";
+    document.body.appendChild(el);
+  }
+  el.innerHTML=`<b>עורך נוסף פתוח</b>
+    <span style="flex:1;min-width:200px">${escapeHtml(h&&h.name?h.name:"מישהו אחר")}
+    עורך את ${escapeHtml(ymLabel(CUR_YM||"2026-01"))} כרגע. שינויים שתעשו כאן עלולים להידחות.</span>
+    <button class="btn" id="holderReload">רענון מהשרת</button>`;
+  const rb=document.getElementById("holderReload");
+  if(rb) rb.onclick=()=>reloadFromServer(true);
+}
+function hideHolder(){ const el=document.getElementById("holderBar"); if(el) el.remove(); }
+
+/* ---- notice another browser's changes ---- */
+async function pollVersions(){
+  if(!CUR_YM || !_backend()) return;
+  try{
+    const r=await fetch(_backend()+"/api/versions",{headers:_idHeaders(_authHeaders())});
+    if(!r.ok) return;
+    const j=await r.json();
+    const info=j.versions[CUR_YM];
+    if(!info) return;
+    if(info.status!==CUR_STATUS){ await refreshMonths(); }
+    if(MY_VERSION!==null && info.version>MY_VERSION){
+      if(hasUnsaved()){
+        // never discard what the user is in the middle of typing
+        showConflict(info.version);
+      }else{
+        // an idle browser must follow the server, not overwrite it later
+        await reloadFromServer(false);
+        toast("הנתונים עודכנו בדפדפן אחר — הוצג המידע העדכני");
+      }
+    }
+  }catch(e){}
+}
+function startPolling(){
+  clearInterval(_pollTimer);
+  _pollTimer=setInterval(pollVersions, 10000);
+  document.addEventListener("visibilitychange",()=>{ if(!document.hidden) pollVersions(); });
+}
+
+function showConflict(serverVersion){
+  if(document.getElementById("conflictBar")) return;
+  const el=document.createElement("div"); el.id="conflictBar";
+  el.style.cssText="position:fixed;inset-block-start:0;inset-inline:0;z-index:180;"+
+    "background:#FFF3E0;border-bottom:2px solid #E8A200;padding:12px 20px;display:flex;"+
+    "gap:12px;align-items:center;flex-wrap:wrap;font-size:13.5px;color:#7A4E00";
+  el.innerHTML=`<div style="flex:1;min-width:240px">
+      <b style="display:block">הנתונים בשרת השתנו</b>
+      דפדפן אחר שמר שינויים. אפשר לטעון את הגרסה מהשרת (השינויים שלכם כאן יאבדו),
+      או לכפות את הגרסה שלכם.
+    </div>
+    <button class="btn" id="cfTake">טעינה מהשרת</button>
+    <button class="btn danger" id="cfForce">כפיית הגרסה שלי</button>`;
+  document.body.appendChild(el);
+  document.getElementById("cfTake").onclick=async()=>{ el.remove(); await reloadFromServer(true); };
+  document.getElementById("cfForce").onclick=async()=>{
+    el.remove();
+    MY_VERSION=serverVersion;          // base our write on what is there now
+    clearTimeout(_saveTimer); _saveError=null;
+    await saveToServer();
+    if(!_saveError) toast("הגרסה שלכם נשמרה");
+  };
+}
+
+async function reloadFromServer(announce){
+  const st=await loadFromServer();
+  if(st){
+    interns=st.interns; ext=st.ext; hols=st.hols;
+    try{
+      localStorage.setItem("schedulerInterns", JSON.stringify(interns));
+      localStorage.setItem("schedulerExt", JSON.stringify(ext));
+      localStorage.setItem("schedulerHols", JSON.stringify(hols));
+    }catch(e){}
+    selId = interns.find(x=>x.id===selId) ? selId : (interns.length?interns[0].id:null);
+    renderRoster(); renderEditor();
+    if(announce) toast("נטענה הגרסה העדכנית מהשרת");
+  }
+  await refreshMonths();
+}
+
 /* ---- the month is frozen and that is what blocks saving ---- */
 function offerUnfreeze(msg){
   if(document.getElementById("unfreezeBanner")) return;
@@ -927,6 +1065,8 @@ async function _fetchServerState(){
   ]);
   if(!rI.ok) throw new Error("status " + rI.status);
   const jI = await rI.json(), jE = await rE.json(), jH = await rH.json();
+  if(jI.version !== undefined) MY_VERSION = jI.version;   // what we are editing from
+  if(jI.lease && jI.lease.by && jI.lease.by !== CLIENT_ID) showHolder(jI.lease);
   return {
     interns: jI.data || [],
     ext: jE.data || {},
@@ -940,44 +1080,40 @@ async function saveToServer(){
   if(_savingToServer) return;
   _savingToServer = true;
   setSyncStatus("saving");
-  const headers = _authHeaders();
+  const headers = _idHeaders(_authHeaders());
   try{
-    // conflict check: fetch server, compare to last known server state
-    const server = await _fetchServerState();
-    const serverHash = JSON.stringify(server.interns).length + "|" +
-                       JSON.stringify(server.ext).length + "|" +
-                       JSON.stringify(server.hols).length;
-    if(_lastServerHash !== null && serverHash !== _lastServerHash){
-      // someone else changed the server since we last synced — reload instead of overwriting
-      setSyncStatus("conflict");
-      interns = server.interns.length ? server.interns : interns;
-      ext = server.ext || {};
-      hols = server.hols || {};
-      _lastServerHash = serverHash;
-      try{
-        localStorage.setItem("schedulerInterns", JSON.stringify(interns));
-        localStorage.setItem("schedulerExt", JSON.stringify(ext));
-        localStorage.setItem("schedulerHols", JSON.stringify(hols));
-      }catch(e){}
-      selId = interns.length ? (interns.find(x=>x.id===selId) ? selId : interns[0].id) : null;
-      renderRoster(); renderEditor();
-      _savingToServer = false;
-      return;
+    // Announce that we are editing. Advisory only: if someone else holds it we
+    // warn, but the version check below is what actually protects the data.
+    await holdLease();
+
+    // The three keys are written as one unit against a single version, so a
+    // half-applied save cannot happen.
+    const q = (MY_VERSION!==null) ? ("?version="+MY_VERSION) : "";
+    const results = [];
+    for(const [k,v] of [["interns",interns],["external",ext],["holidays",hols]]){
+      const r = await fetch(backend+"/api/state/"+k+(results.length?"":q),
+                            {method:"POST",headers,body:JSON.stringify(v)});
+      results.push(r);
+      if(!r.ok) break;                    // stop before writing the rest
+      const j = await r.clone().json().catch(()=>({}));
+      if(j && j.version) MY_VERSION = j.version;
     }
-    // no conflict — safe to write
-    const results = await Promise.all([
-      fetch(backend+"/api/state/interns",{method:"POST",headers,body:JSON.stringify(interns)}),
-      fetch(backend+"/api/state/external",{method:"POST",headers,body:JSON.stringify(ext)}),
-      fetch(backend+"/api/state/holidays",{method:"POST",headers,body:JSON.stringify(hols)}),
-    ]);
     const failed = results.find(r=>!r.ok);
     if(failed){
       // A bare status code hid the real cause (409 = the month is frozen), so
       // read the server's explanation and act on it.
       let why = `שגיאה ${failed.status}`;
-      try{ const j = await failed.json(); if(j && j.error) why = j.error; }catch(e){}
+      let j = null;
+      try{ j = await failed.json(); if(j && j.error) why = j.error; }catch(e){}
       setSyncStatus("error", why);
-      if(failed.status === 409) offerUnfreeze(why);
+      if(j && j.conflict){
+        // another browser wrote first; our version is stale
+        showConflict(j.serverVersion);
+      }else if(j && j.locked){
+        showHolder(j.holder);
+      }else if(failed.status === 409){
+        offerUnfreeze(why);
+      }
       _saveError = why;
     }
     else {
@@ -1447,9 +1583,9 @@ $("#resetEditsBtn").onclick = ()=>{
 // re-optimize with edits
 $("#reoptBtn").onclick = async()=>{
   const status = $("#editCount");
-  const backend = genBackendInput.value.trim().replace(/\/+$/,"");
-  const password = genPasswordInput.value;
-  if(!backend){ toast("נא להזין כתובת שרת בלשונית יצירת שיבוץ"); return; }
+  const backend = _backend();
+  const password = genPasswordInput.value || localStorage.getItem("schedulerPassword") || "";
+  if(!backend){ toast("לא נמצאה כתובת שרת — פתחו את העורך דרך כתובת השרת"); return; }
 
   // build base CSV from editGrid
   let baseCsv = "day,station,id,name\n";
@@ -1552,8 +1688,8 @@ $("#genBtn").onclick=async()=>{
   if(isFrozen() && !confirm("החודש "+ymLabel(CUR_YM)+" מוקפא.\n\n"+
       "אפשר להריץ, אבל התוצאה לא תישמר לארכיון ולא תפורסם עד שתבטלו את ההקפאה.\nלהמשיך?")) return;
   const status=$("#genStatus");
-  const backend=genBackendInput.value.trim().replace(/\/+$/,"");
-  const password=genPasswordInput.value;
+  const backend=_backend();
+  const password=genPasswordInput.value || localStorage.getItem("schedulerPassword") || "";
   const year=$("#genYear").value.trim(), month=$("#genMonth").value.trim();
   if(!backend){ status.textContent="נא להזין כתובת שרת."; status.style.color="var(--weak)"; return; }
   if(!interns.length){ status.textContent="אין נתוני מתמחים לשיבוץ."; status.style.color="var(--weak)"; return; }
@@ -1996,6 +2132,8 @@ function renderMonths(){
 
 async function selectMonth(ym){
   if(_savingToServer && !confirm("שמירה עדיין רצה. לעבור בכל זאת?")) return;
+  await releaseLease();
+  MY_VERSION=null;                 // the new month has its own version line
   await srvApi("/api/months/"+ym+"/select",{method:"POST"});
   const st=await loadFromServer();
   interns=st.interns; ext=st.ext; hols=st.hols;
@@ -2142,5 +2280,8 @@ async function archiveResult(data){
     if(/401|סיסמ/.test(e.message)) askServerPassword();
     else console.warn("months:", e.message);
   }
+  startPolling();
+  startLeaseRenewal();
+  window.addEventListener("pagehide", releaseLease);
 })();
 </script>

@@ -50,7 +50,11 @@ SCHEMA = [
         frozen_at  TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
-        doc        TEXT NOT NULL)""",
+        doc        TEXT NOT NULL,
+        version    INTEGER NOT NULL DEFAULT 1,
+        lease_by   TEXT,
+        lease_name TEXT,
+        lease_until TEXT)""",
     """CREATE TABLE IF NOT EXISTS artifacts (
         ym TEXT PRIMARY KEY, filename TEXT NOT NULL,
         blob %s NOT NULL, created_at TEXT NOT NULL)""" % BLOB_TYPE,
@@ -166,10 +170,24 @@ def engine_label():
     return "Postgres · " + re.sub(r"^.*@", "", DATABASE_URL).split("/")[0].split("?")[0]
 
 
+ADD_COLUMNS = [
+    ("months", "version", "INTEGER NOT NULL DEFAULT 1"),
+    ("months", "lease_by", "TEXT"),
+    ("months", "lease_name", "TEXT"),
+    ("months", "lease_until", "TEXT"),
+]
+
+
 def init_db():
     c = _con()
     for stmt in SCHEMA:
         c.execute(stmt)
+    # upgrade a database created before versioning existed
+    for table, col, decl in ADD_COLUMNS:
+        try:
+            c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+        except Exception:                                          # noqa: BLE001
+            pass                                                   # already there
 
 
 def log(actor, action, ym=None, detail=""):
@@ -208,7 +226,17 @@ def get_month(ym):
     if not r:
         return None
     return {"ym": r["ym"], "status": r["status"], "frozen_at": r["frozen_at"],
-            "created_at": r["created_at"], "updated_at": r["updated_at"], **_doc_of(r)}
+            "created_at": r["created_at"], "updated_at": r["updated_at"],
+            "version": r["version"] or 1, "lease": _lease_of(r), **_doc_of(r)}
+
+
+def _lease_of(row):
+    """An editing lease is advisory and short-lived: it tells a second browser
+    that someone else is working, but correctness rests on the version check."""
+    until = row["lease_until"] if "lease_until" in row.keys() else None
+    if not until or until < now():
+        return None
+    return {"by": row["lease_by"], "name": row["lease_name"], "until": until}
 
 
 def month_meta(ym):
@@ -218,6 +246,7 @@ def month_meta(ym):
     return {"ym": m["ym"], "status": m["status"], "frozenAt": m["frozen_at"],
             "updatedAt": m["updated_at"], "generatedAt": m.get("generated_at"),
             "interns": len(m["interns"]), "assigned": len(m["assignment"]),
+            "version": m["version"], "lease": m["lease"],
             "hasXlsx": get_artifact(ym)[0] is not None}
 
 
@@ -232,13 +261,14 @@ def save_month(ym, doc, status=None):
     payload = json.dumps(doc, ensure_ascii=False)
     if exists:
         if status:
-            c.execute("UPDATE months SET doc=?, status=?, updated_at=? WHERE ym=?",
-                      (payload, status, now(), ym))
+            c.execute("""UPDATE months SET doc=?, status=?, updated_at=?,
+                         version=version+1 WHERE ym=?""", (payload, status, now(), ym))
         else:
-            c.execute("UPDATE months SET doc=?, updated_at=? WHERE ym=?", (payload, now(), ym))
+            c.execute("""UPDATE months SET doc=?, updated_at=?, version=version+1
+                         WHERE ym=?""", (payload, now(), ym))
     else:
-        c.execute("""INSERT INTO months(ym,status,created_at,updated_at,doc)
-                     VALUES (?,?,?,?,?)""", (ym, status or "draft", now(), now(), payload))
+        c.execute("""INSERT INTO months(ym,status,created_at,updated_at,doc,version)
+                     VALUES (?,?,?,?,?,1)""", (ym, status or "draft", now(), now(), payload))
     sync_codes(doc.get("interns") or [])
 
 
@@ -278,8 +308,50 @@ def create_month(ym, source_ym=None, copy_external=False, copy_holidays=False):
 
 
 def set_status(ym, status):
-    _con().execute("UPDATE months SET status=?, frozen_at=?, updated_at=? WHERE ym=?",
+    _con().execute("""UPDATE months SET status=?, frozen_at=?, updated_at=?,
+                      version=version+1 WHERE ym=?""",
                    (status, now() if status == "frozen" else None, now(), ym))
+
+
+def version_of(ym):
+    r = _con().execute("SELECT version FROM months WHERE ym=?", (ym,)).fetchone()
+    return (r["version"] or 1) if r else None
+
+
+def versions():
+    """Cheap poll payload: what every month is at right now."""
+    rows = _con().execute("SELECT ym, version, status, updated_at FROM months").fetchall()
+    return {r["ym"]: {"version": r["version"] or 1, "status": r["status"],
+                      "updatedAt": r["updated_at"]} for r in rows}
+
+
+# ------------------------------------------------------------- leases -------
+LEASE_SECONDS = 45
+
+
+def take_lease(ym, who, name=""):
+    """Grant or renew a short editing lease. Returns (ok, holder)."""
+    c = _con()
+    r = c.execute("SELECT lease_by, lease_name, lease_until FROM months WHERE ym=?",
+                  (ym,)).fetchone()
+    if r is None:
+        return False, None
+    held = _lease_of(r)
+    if held and held["by"] != who:
+        return False, held
+    until = (datetime.datetime.now()
+             + datetime.timedelta(seconds=LEASE_SECONDS)).replace(microsecond=0).isoformat(" ")
+    c.execute("UPDATE months SET lease_by=?, lease_name=?, lease_until=? WHERE ym=?",
+              (who, name, until, ym))
+    return True, {"by": who, "name": name, "until": until}
+
+
+def drop_lease(ym, who):
+    c = _con()
+    r = c.execute("SELECT lease_by FROM months WHERE ym=?", (ym,)).fetchone()
+    if r and r["lease_by"] == who:
+        c.execute("UPDATE months SET lease_by=NULL, lease_name=NULL, lease_until=NULL WHERE ym=?",
+                  (ym,))
 
 
 def delete_month(ym):
