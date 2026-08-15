@@ -5,7 +5,7 @@ Hard constraints are guaranteed (0 violations); soft objectives
 (fair load / weekend / Fri / Sat balance, no-sandwich, preferred days &
 stations, even spread) are optimized via constrained construction + SA.
 The CSV must have the same columns as july2026interns.csv."""
-import sys, csv, datetime, random, math, json, calendar, pickle
+import sys, os, csv, datetime, random, math, json, calendar, pickle
 random.seed(42)
 _RAW = sys.argv[1:]
 # split flags (--key value) from positional args; positional order is unchanged for compatibility
@@ -33,6 +33,11 @@ LOCKS_CSV = _FLAGS.get("locks")                      # locked slots that must no
 RELAX_PAIR = _FLAGS.get("relax-pair") == "1"         # pair strength: soft instead of hard
 RELAX_CROSS = _FLAGS.get("relax-cross") == "1"       # PICU→ER1 cross rule: soft instead of hard
 
+# Search effort. The defaults are what a real month should use; tests lower
+# them so a suite that exercises the solver end-to-end stays runnable.
+RESTARTS = int(os.environ.get("SCHED_RESTARTS", "6"))
+SA_ITERS = int(os.environ.get("SCHED_ITERS", "100000"))
+
 STATIONS = ["er1", "er2", "nicu1", "nicu2", "ward", "picu"]
 PAIRS = [("er1", "er2"), ("nicu1", "nicu2")]
 PAIR_OF = {"er1": "er2", "er2": "er1", "nicu1": "nicu2", "nicu2": "nicu1"}
@@ -54,6 +59,13 @@ if EXT_CSV:
             _st = (_row.get("station") or "").strip()
             _nm = (_row.get("name") or "").strip()
             if _st in STATIONS and _nm:
+                # A day outside this month is stale data carried over from a
+                # longer month. Left in, it silently shrinks the slot count the
+                # solver thinks it must cover, and the totals stop adding up.
+                if _d not in DAYS:
+                    print(f"WARN external duty ignored: day {_d} is not in this month "
+                          f"({_nm}, {_st})")
+                    continue
                 EXTERNAL[(_d, _st)] = _nm
 SKIP = set(EXTERNAL.keys())            # (day, station) NOT filled by interns
 
@@ -203,6 +215,28 @@ for iid, it in interns.items():
             LATE_PREF.add(iid)
 if PINNED:
     print(f"  Pinned assignments: {len(PINNED)}")
+    # A pin is an explicit instruction and is honoured, but if it collides with
+    # that intern's own ceiling the run ends with violations the admin never
+    # asked for and cannot place. Say so plainly, here, by name.
+    for (_d, _st), _iid in PINNED.items():
+        _it = interns.get(_iid)
+        if not _it:
+            continue
+        _why = []
+        if _d in _it["blocked"]:
+            _why.append("היום חסום עבורו")
+        if not _it["approved"].get(_st):
+            _why.append(f"אינו מאושר ל-{_st}")
+        if IS_FRI[_d] and _it["maxFri"] is not None and _it["maxFri"] < 1:
+            _why.append("תקרת שישי/ערב חג היא 0")
+        if IS_SAT[_d] and _it["maxSat"] is not None and _it["maxSat"] < 1:
+            _why.append("תקרת שבת/חג היא 0")
+        if IS_WEEKEND[_d] and _it["maxWeekend"] is not None and _it["maxWeekend"] < 1:
+            _why.append("תקרת סופ\"ש היא 0")
+        if _why:
+            print(f"DIAG_PIN_CONFLICT: קיבוע של {_it['name']} ל-{_d} בחודש "
+                  f"({_st}) מתנגש עם ההגדרות שלו: {' · '.join(_why)}. "
+                  f"הקיבוע יכובד וייווצרו הפרות.")
 if APPROVED_OVERRIDE:
     print(f"  Station overrides: {len(APPROVED_OVERRIDE)} (day,station,intern) entries")
 if MAX_SAND:
@@ -636,11 +670,37 @@ FAIR_THU = water_fill(CAP_THU, sum(1 for d in THU_DAYS for st in STATIONS if (d,
 
 W = dict(total=2.0, wknd=2.0, fri=1.5, sat=1.5, thu=1.5, sand=9.0, pref=6.0,
          spread=0.5, stpref=2.0, early=3.0)
-# Peak-load smoothing: penalize anyone whose total exceeds PEAK_THR, quadratically.
-# PEAK_THR auto-adapts to "one above the rounded mean load", so it tightens
-# automatically when fewer slots need covering (e.g. with external duties).
-PEAK_THR = math.ceil(TOTAL_SLOTS / max(1, len(IIDS))) + 1
+# ---- peak-load smoothing -------------------------------------------------
+# How evenly *can* the month be shared? With per-intern ceilings, the answer is
+# the smallest L such that everyone working at most L still covers every slot.
+# Anyone above L-1 is then carrying more than their share, and the count of
+# such people is what we want to minimise.
+#
+# This used to be ceil(mean)+1, which for a typical month lands one above the
+# real peak — so the penalty never fired and the top of the distribution
+# floated free. The cap stays soft: a month that genuinely needs several people
+# at the peak still solves, it just pays for each one.
+def _ideal_peak():
+    lo, hi = 1, max(CAP.values()) if CAP else 1
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if sum(min(CAP[i], mid) for i in IIDS) >= TOTAL_SLOTS:
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo
+
+IDEAL_PEAK = _ideal_peak()
+# how many interns must sit at the peak even in a perfect split
+MIN_AT_PEAK = max(0, TOTAL_SLOTS - sum(min(CAP[i], IDEAL_PEAK - 1) for i in IIDS))
+# Charge for every load at the ideal peak. MIN_AT_PEAK of those are unavoidable
+# and pay a constant that cannot be optimised away, so the only thing this term
+# can actually reduce is the *surplus* — which is exactly the goal. The old
+# threshold (mean + 1) sat above the real peak, so the term never fired at all.
+PEAK_THR = max(1, IDEAL_PEAK - 1)
 PEAK_W   = 15.0
+print(f"ideal peak: {IDEAL_PEAK} shifts, with {MIN_AT_PEAK} intern(s) unavoidably there "
+      f"(penalty applies above {PEAK_THR})")
 
 # Stability anchor for mid-month re-optimization: (day,station) -> intern id that the
 # existing schedule had there. Changing such a slot costs STAB_W, so the optimizer keeps
@@ -766,7 +826,47 @@ def sa(s, iters=60000, T0=8.0, T1=0.05, keys=None):
     keys = [k for k in keys if k not in PINNED and k not in LOCKED]   # never move pinned/locked slots
     for it in range(iters):
         T = T0 * (T1/T0)**(it/iters)
-        if random.random() < 0.75:
+        r = random.random()
+        if r < 0.15:
+            # ---- targeted rebalance ----------------------------------------
+            # Random reassignment reaches the move "hand a shift from someone
+            # over their share to someone under it" only by luck: the receiver
+            # has to be picked out of every eligible intern. When the shortfall
+            # sits with people approved for a single, contested station, that
+            # luck rarely arrives — which is how a month ends up with several
+            # interns above the peak while others sit below their target.
+            # So look for that move directly, from the receiver's side.
+            under = [i for i in IIDS if s.cnt[i]["total"] < FAIR_TOTAL[i] - 0.5]
+            if not under:
+                continue
+            j = random.choice(under)
+            cand_slots = [k for k in keys if interns[j]["approved"][k[1]]]
+            if not cand_slots:
+                continue
+            random.shuffle(cand_slots)
+            done = False
+            for (d, st) in cand_slots[:40]:
+                i = s.assign[(d, st)]
+                if i is None or i == j:
+                    continue
+                # only take from someone carrying more than the receiver
+                if s.cnt[i]["total"] <= s.cnt[j]["total"]:
+                    continue
+                s.remove(d, st)
+                if hard_ok(s, j, d, st):
+                    s.place(j, d, st)
+                    if pair_ok_at(s, d, st) and cross_ok_at(s, d):
+                        new = cost(s)
+                        if new <= cur or random.random() < math.exp((cur-new)/max(T,1e-6)):
+                            cur = new
+                            done = True
+                            break
+                    s.remove(d, st)
+                s.place(i, d, st)
+            if done and cur < best:
+                best = cur; best_state = snapshot(s)
+            continue
+        if r < 0.75:
             # reassignment move
             d, st = random.choice(keys)
             i = s.assign[(d, st)]
@@ -1126,10 +1226,10 @@ def main():
                 STAB[(d, st)] = iid
         fut_keys = [(d, st) for (d, st) in SLOTS if d >= FROM_DAY]
         best = None; bc = INF; fb = None; fb_key = None
-        for a in range(4):
+        for a in range(max(1, RESTARTS // 2)):
             random.seed(40 + a)
             stt, unf = construct_midmonth(base)
-            sa(stt, iters=70000, T0=6.0, T1=0.03, keys=fut_keys)
+            sa(stt, iters=int(SA_ITERS * 0.7), T0=6.0, T1=0.03, keys=fut_keys)
             errs = validate(stt)
             key = (len(errs), cost(stt) + 1000*len(unf))
             if fb_key is None or key < fb_key: fb_key = key; fb = snapshot(stt)
@@ -1141,10 +1241,10 @@ def main():
         s = State(); restore(s, best)
     else:
         best = None; bc = INF; fb = None; fb_key = None
-        for a in range(6):
+        for a in range(RESTARTS):
             random.seed(40 + a)
             stt, unf = construct()
-            sa(stt, iters=100000, T0=8.0, T1=0.03)
+            sa(stt, iters=SA_ITERS, T0=8.0, T1=0.03)
             errs = validate(stt)
             key = (len(errs), cost(stt) + 1000 * len(unf))
             if fb_key is None or key < fb_key:
@@ -1191,6 +1291,21 @@ def main():
         print(f"mid-month: from day {FROM_DAY}; changed {len(changed)} of {len(fut_keys)} future intern-slots.")
 
     # ---- accurate figures for the assumptions sheet ----
+    # How close is this to the best spread the ceilings allow? Without this the
+    # admin cannot tell "the solver did badly" from "the month cannot be split
+    # any more evenly than that".
+    _loads = sorted((s.cnt[i]["total"] for i in IIDS), reverse=True)
+    _at_peak = sum(1 for x in _loads if x >= IDEAL_PEAK)
+    _over = sum(1 for x in _loads if x > IDEAL_PEAK)
+    balance_txt = (f"העומס הגבוה ביותר האפשרי בחודש הזה הוא {IDEAL_PEAK} תורנויות, "
+                   f"ולפחות {MIN_AT_PEAK} מתמחים חייבים להגיע אליו. "
+                   f"בפועל: {_at_peak} מתמחים עם {IDEAL_PEAK} תורנויות"
+                   + (f", ומתוכם {_over} מעל זה" if _over else "")
+                   + (". זהו הפיזור הטוב ביותר האפשרי."
+                      if _at_peak <= MIN_AT_PEAK and not _over
+                      else f". ניתן היה להגיע ל-{MIN_AT_PEAK} — כדאי לבדוק תקרות, "
+                           "ימים חסומים, ומי מאושר לתחנות העמוסות."))
+    print("DIAG_BALANCE: " + balance_txt)
     n_sand = count_sandwiches(s)
     missed = []; requested = 0
     for i in IIDS:
@@ -1246,7 +1361,7 @@ def main():
      ("סנדוויץ' (רך)", f"שאיפה להימנע מהפרש יום (עבודה-מנוחה-עבודה). בפתרון: {n_sand} סנדוויצ'ים."),
      ("ימים מועדפים (רך)", miss_txt),
      ("העדפת תחנה (רך)", "מתמחים עם preferredStationId / הערת-תחנה תועדפו לשבץ בתחנתם (פירוט מספרי בגיליון 'סיכום והוגנות')."),
-     ("הוגנות", f"יעדים מאוזנים בשיטת water-filling + קנס על עומס מעל {PEAK_THR} כדי לרסן חריגים. מספרים בפועל לכל מתמחה בגיליון 'סיכום והוגנות'."),
+     ("הוגנות", f"יעדים מאוזנים בשיטת water-filling. {balance_txt} מספרים בפועל לכל מתמחה בגיליון 'סיכום והוגנות'."),
      ("שיטה", "בנייה חמדנית מוגבלת-אילוצים + חיפוש מקומי (Simulated Annealing); נבחר הפתרון התקין בעל העלות הנמוכה."),
      ("אימות", f"כל האילוצים הקשיחים נבדקו תוכניתית – {vstr}; {filled}/{TOTAL_SLOTS} משבצות מאוישות."),
     ]

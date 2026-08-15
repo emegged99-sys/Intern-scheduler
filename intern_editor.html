@@ -1418,9 +1418,20 @@ function renderResults(data, switchToTab){
                   <ul style="margin:0;padding-inline-start:20px;font-size:13px;color:#8E2A1D">${diag}</ul>` : ""}
       </div>`;
   }
+  const notices = data.notices || [];
+  const noticeHtml = notices.length ? `
+    <div class="card" style="max-width:100%;border-color:#F0D79A;background:#FFF6E0">
+      <h3 style="color:#8A5A00">לתשומת לבכם</h3>
+      <ul style="margin:0;padding-inline-start:20px;font-size:13px;color:#7A5300">
+        ${notices.map(n=>`<li style="margin-bottom:4px">${escapeHtml(n)}</li>`).join("")}
+      </ul></div>` : "";
+  const balHtml = data.balance ? `<p style="margin:8px 0 0;font-size:13px;color:${
+      data.balance.includes("הטוב ביותר") ? "var(--strong)" : "var(--mid)"}">${
+      escapeHtml(data.balance)}</p>` : "";
   statsDiv.innerHTML = `<div class="card" style="max-width:100%"><h3>תוצאות שיבוץ — ${month}/${year}</h3>
-    <p style="margin:0;color:var(--muted);font-size:13px">${stats ? escapeHtml(stats) : 'השיבוץ הושלם.'}</p></div>`
-    + gapHtml;
+    <p style="margin:0;color:var(--muted);font-size:13px">${stats ? escapeHtml(stats) : 'השיבוץ הושלם.'}</p>
+    ${balHtml}</div>`
+    + noticeHtml + gapHtml;
 
   rebuildSummary();
   updateEditBar();

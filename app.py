@@ -512,6 +512,8 @@ def generate():
         # parse diagnostics from stdout
         stdout = result.stdout or ""
         diagnostics = []
+        notices = []          # things the admin should see but that are not failures
+        balance = ""
         in_shortage = False
         in_empty = False
         for line in stdout.split("\n"):
@@ -532,6 +534,13 @@ def generate():
                 diagnostics.append(line[len("DIAG_NO_APPROVAL:"):].strip())
             elif line.startswith("DIAG_BLOCKED:"):
                 diagnostics.append(line[len("DIAG_BLOCKED:"):].strip())
+            elif line.startswith("DIAG_PIN_CONFLICT:"):
+                # an explicit pin that contradicts the same intern's ceilings
+                notices.append(line[len("DIAG_PIN_CONFLICT:"):].strip())
+            elif line.startswith("DIAG_BALANCE:"):
+                balance = line[len("DIAG_BALANCE:"):].strip()
+            elif line.startswith("WARN "):
+                notices.append(line[len("WARN "):].strip())
 
         # detect failure: process crashed, or produced empty slots, or hard violations
         has_hard_failure = (result.returncode != 0 or not os.path.exists(out_path))
@@ -616,6 +625,8 @@ def generate():
             partial=bool(gaps),
             gaps=gaps,
             diagnostics=diagnostics,
+            notices=notices,
+            balance=balance,
             year=int(year),
             month=int(month),
             stats=stats_line,
