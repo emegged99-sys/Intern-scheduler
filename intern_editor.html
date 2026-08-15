@@ -54,6 +54,15 @@
   li.row:hover{background:#f4f7fc}
   li.row.sel{background:var(--blue-soft); border-color:#bccbe6}
   li.row.off{opacity:.55}
+  li.row:focus-visible{outline:2px solid var(--blue); outline-offset:1px}
+  /* the handle stays quiet until the row is under the pointer */
+  li.row .grip{color:#c3cbd9; cursor:grab; font-size:12px; letter-spacing:-2px;
+    user-select:none; flex:none; opacity:0; transition:opacity .12s}
+  li.row:hover .grip, li.row:focus-visible .grip{opacity:1}
+  li.row.dragging{opacity:.4}
+  li.row.drop-before{box-shadow:0 -3px 0 -1px var(--blue)}
+  li.row.drop-after{box-shadow:0 3px 0 -1px var(--blue)}
+  .list-head .hint{font-size:11px; color:#9aa3b2; margin-top:6px}
   .dot{width:8px; height:8px; border-radius:50%; flex:none; background:var(--strong)}
   li.row.off .dot{background:#aab4c4}
   .row-main{flex:1; min-width:0}
@@ -258,7 +267,8 @@
 
 <main class="view" id="view-interns">
   <aside>
-    <div class="list-head"><input class="search" id="search" placeholder="חיפוש מתמחה…"></div>
+    <div class="list-head"><input class="search" id="search" placeholder="חיפוש מתמחה…">
+      <div class="hint" id="rosterHint"></div></div>
     <ul class="roster" id="roster"></ul>
   </aside>
   <section class="editor" id="editor"><div class="empty">בחר מתמחה מהרשימה, או הוסף חדש.</div></section>
@@ -371,7 +381,7 @@
     <button class="btn ghost" id="resetEditsBtn">אפס שינויים</button>
     <span class="edit-count" id="editCount"></span>
   </div>
-  <div class="hint" style="margin-bottom:8px; color:var(--muted)">לחצו על תא לנעילה / הסרה / החלפת מתמחה. שינויים מסומנים בצבע.</div>
+  <div class="hint" style="margin-bottom:8px; color:var(--muted)">לחצו על תא לנעילה / הסרה / החלפת מתמחה. שינויים מסומנים בצבע. החלפת מתמחה נשמרת אוטומטית להרצה הבאה; «הרץ מחדש עם שינויים» משנה את המינימום ההכרחי סביבה.</div>
   <div style="overflow:auto">
     <table class="ext" id="resTable"></table>
   </div>
@@ -468,18 +478,99 @@ function renderRoster(){
   const ul=$("#roster"); ul.innerHTML="";
   const q=filter.trim();
   const items=interns.filter(it=>!q || it.name.includes(q) || it.id.includes(q));
+  // Reordering while a search is filtering the list would move a row to a
+  // position the person cannot see, so dragging is only offered on the full
+  // list. The order is the roster's own and is saved with it.
+  const canReorder = !q;
   for(const it of items){
     const li=document.createElement("li");
     li.className="row"+(it.id===selId?" sel":"")+(it.active?"":" off");
     li.dataset.id=it.id;
-    li.innerHTML=`<span class="dot"></span><div class="row-main">
+    li.tabIndex=0;
+    if(canReorder) li.draggable=true;
+    li.innerHTML=`${canReorder?'<span class="grip" title="גררו לשינוי הסדר" aria-hidden="true">⋮⋮</span>':""}
+      <span class="dot"></span><div class="row-main">
       <div class="row-name">${escapeHtml(it.name||"(ללא שם)")}</div>
       <div class="row-sub">${approvedCount(it)} תחנות · ${it.blocked.length} חסומים · ${it.preferred.length} מועדפים${it.active?"":" · לא פעיל"}</div>
       </div>`;
     li.onclick=()=>{selId=it.id; renderAll();};
+    if(canReorder){
+      li.addEventListener("dragstart", onDragStart);
+      li.addEventListener("dragover", onDragOver);
+      li.addEventListener("dragleave", onDragLeave);
+      li.addEventListener("drop", onDrop);
+      li.addEventListener("dragend", onDragEnd);
+    }
+    // keyboard equivalent, and the only way to reorder on a touch screen
+    li.addEventListener("keydown", e=>{
+      if(!canReorder) return;
+      if((e.altKey||e.metaKey) && (e.key==="ArrowUp"||e.key==="ArrowDown")){
+        e.preventDefault();
+        moveIntern(it.id, e.key==="ArrowUp" ? -1 : 1);
+      }
+    });
     ul.appendChild(li);
   }
   $("#count").textContent=`${interns.length} מתמחים · ${interns.filter(i=>i.active).length} פעילים`;
+  const hint=$("#rosterHint");
+  if(hint) hint.textContent = canReorder
+    ? "גררו כדי לשנות סדר · Alt+↑/↓"
+    : "ביטול החיפוש יאפשר שינוי סדר";
+}
+
+/* ---------- roster order ---------- */
+let _dragId=null;
+function onDragStart(e){
+  _dragId=this.dataset.id;
+  this.classList.add("dragging");
+  e.dataTransfer.effectAllowed="move";
+  try{ e.dataTransfer.setData("text/plain", _dragId); }catch(err){}
+}
+function onDragOver(e){
+  if(!_dragId || this.dataset.id===_dragId) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect="move";
+  const r=this.getBoundingClientRect();
+  const after=(e.clientY - r.top) > r.height/2;
+  this.classList.toggle("drop-after", after);
+  this.classList.toggle("drop-before", !after);
+}
+function onDragLeave(){ this.classList.remove("drop-before","drop-after"); }
+function onDragEnd(){
+  _dragId=null;
+  document.querySelectorAll("#roster li").forEach(x=>
+    x.classList.remove("dragging","drop-before","drop-after"));
+}
+function onDrop(e){
+  e.preventDefault();
+  const targetId=this.dataset.id;
+  const after=this.classList.contains("drop-after");
+  onDragEnd();
+  if(!targetId || targetId===_dragId) return;
+  placeIntern(e.dataTransfer.getData("text/plain") || _dragId, targetId, after);
+}
+function placeIntern(dragId, targetId, after){
+  const from=interns.findIndex(x=>x.id===dragId);
+  if(from<0) return;
+  const [moved]=interns.splice(from,1);
+  let to=interns.findIndex(x=>x.id===targetId);
+  if(to<0){ interns.splice(from,0,moved); return; }
+  interns.splice(after ? to+1 : to, 0, moved);
+  afterReorder(moved.id);
+}
+function moveIntern(id, delta){
+  const i=interns.findIndex(x=>x.id===id);
+  const j=i+delta;
+  if(i<0 || j<0 || j>=interns.length) return;
+  [interns[i], interns[j]]=[interns[j], interns[i]];
+  afterReorder(id);
+}
+function afterReorder(focusId){
+  renderRoster();
+  saveState();                       // the order is part of the roster
+  const li=document.querySelector(`#roster li[data-id="${CSS.escape(focusId)}"]`);
+  if(li){ li.focus(); li.scrollIntoView({block:"nearest"}); }
+  toast("סדר המתמחים עודכן");
 }
 function escapeHtml(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
 
@@ -1685,7 +1776,7 @@ $("#resTable").addEventListener("click", function(e){
       editGrid[k] = orig ? {...orig} : null;
     } else {
       editGrid[k] = null;
-      delete editLocks[k];
+      delete editLocks[k];     // an emptied slot is for the solver to fill
     }
     closePopup(); rebuildResultsTable(); rebuildSummary(); updateEditBar();
   };
@@ -1696,7 +1787,10 @@ $("#resTable").addEventListener("click", function(e){
     const it = interns.find(x=>x.id===iid);
     if(it){
       editGrid[k] = {id:it.id, name:it.name};
-      delete editLocks[k]; // changed cells aren't auto-locked
+      // Putting a specific person in a cell is an instruction, so it holds
+      // through the next run. Left unlocked, the re-run simply reassigned the
+      // slot and the change appeared to be ignored.
+      editLocks[k] = true;
     }
     closePopup(); rebuildResultsTable(); rebuildSummary(); updateEditBar();
   };
@@ -1733,6 +1827,11 @@ $("#reoptBtn").onclick = async()=>{
     locksCsv += `${d},${st}\n`;
   }
 
+  // remember what we sent, so we can say how much actually moved
+  const sentBase = {};
+  for(const [k, v] of Object.entries(editGrid)) sentBase[k] = v ? v.id : null;
+  const lockedCount = Object.keys(editLocks).length;
+
   showGenLoading();
   showTab("generate");
   try{
@@ -1764,7 +1863,15 @@ $("#reoptBtn").onclick = async()=>{
     hideGenLoading();
     renderResults(data);
     archiveResult(data);
-    toast("השיבוץ עודכן בהצלחה");
+    // A re-run is meant to disturb as little as possible; say how little.
+    let moved = 0;
+    for(const a of (data.assignments||[])){
+      const k = cellKey(a.day, a.station);
+      if(k in sentBase && sentBase[k] !== a.id) moved++;
+    }
+    toast(moved === 0
+      ? `השיבוץ אושר ללא שינויים (${lockedCount} תאים נעולים)`
+      : `השיבוץ עודכן — ${moved} משבצות שונו, השאר נשמר`);
   }catch(err){
     hideGenLoading();
     const genStatus = $("#genStatus");

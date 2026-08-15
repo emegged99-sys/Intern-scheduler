@@ -70,6 +70,11 @@ if EXT_CSV:
 SKIP = set(EXTERNAL.keys())            # (day, station) NOT filled by interns
 
 # ---- locked slots (from --locks): must not change during re-optimization ----
+# Slots whose occupant is decided before solving: pins from the roster, and
+# cells the admin locked or edited by hand in the results view. LOCKED only ever
+# kept the optimiser from *moving* a slot — nothing put the intended person
+# there, so a locked cell was filled by whoever the fresh construction chose.
+FIXED = {}       # (day, station) -> intern id, honoured as given
 LOCKED = set()   # (day, station) pairs that are frozen
 if LOCKS_CSV:
     with open(LOCKS_CSV, encoding="utf-8-sig") as _f:
@@ -561,20 +566,37 @@ def greedy_score_trial(s, trial, d, i, st):
     return greedy_score(s, i, d, st)
 
 # build initial schedule day-by-day
+def seed_fixed(s):
+    """Put every decided occupant in place before anything is solved: pins from
+    the roster, then cells the admin locked or edited. These are instructions,
+    not suggestions — they are honoured even when they breach a ceiling, and the
+    breach is reported rather than silently resolved by moving the person."""
+    placed = 0
+    for src in (PINNED, FIXED):
+        for (d, st), iid in src.items():
+            if (d, st) in SKIP or iid not in IIDS:
+                continue
+            if s.assign[(d, st)] is not None:
+                continue
+            if s.working(iid, d):      # already on that day elsewhere; cannot double-book
+                continue
+            s.place(iid, d, st)
+            placed += 1
+    return placed
+
+
 def construct():
     s = State()
     unfilled = []
-    # place pinned assignments first
-    for (d, st), iid in PINNED.items():
-        if (d, st) not in SKIP and iid in IIDS:
-            if not s.working(iid, d):
-                s.place(iid, d, st)
+    seed_fixed(s)
     for d in DAYS:
         res = solve_day(s, d)
         if res is None:
             # fill what we can greedily, mark rest unfilled
-            used = set()
-            for st in sorted([s2 for s2 in STATIONS if (d, s2) not in SKIP],
+            used = {s.assign[(d, x)] for x in STATIONS if s.assign[(d, x)] is not None}
+            used.discard(None)
+            for st in sorted([s2 for s2 in STATIONS
+                              if (d, s2) not in SKIP and s.assign[(d, s2)] is None],
                              key=lambda st: len(feasible_candidates(s, d, st, used))):
                 cand = [i for i in IIDS if i not in used and hard_ok(s, i, d, st)]
                 if cand:
@@ -608,6 +630,7 @@ def construct_midmonth(base):
     solve it fully with the constrained day-solver. Counts & no-consecutive span the lock
     boundary. SA + the stability anchor then minimize changes vs the base."""
     s = State(); unfilled = []
+    seed_fixed(s)                 # pins and admin-fixed cells outrank the base
     # 1) lock the past: place existing assignments of still-current interns
     for (d, st), iid in base.items():
         if d < FROM_DAY and iid in IIDS and (d, st) not in SKIP and not s.working(iid, d):
@@ -823,7 +846,8 @@ def sa(s, iters=60000, T0=8.0, T1=0.05, keys=None):
     cur = cost(s); best = cur
     best_state = snapshot(s)
     keys = list(SLOTS) if keys is None else list(keys)
-    keys = [k for k in keys if k not in PINNED and k not in LOCKED]   # never move pinned/locked slots
+    # never move a decided slot: pins, locks, or a cell the admin edited
+    keys = [k for k in keys if k not in PINNED and k not in LOCKED and k not in FIXED]
     for it in range(iters):
         T = T0 * (T1/T0)**(it/iters)
         r = random.random()
@@ -1217,6 +1241,23 @@ def BUILD(assign, order, name_of, notes_lines=None):
 def main():
     base, base_names = ({}, {})
     midmonth = bool(BASE_CSV and FROM_DAY)
+    # A base without --from means "re-run over this schedule": keep it wherever
+    # the rules still allow, and change as little as possible. Previously the
+    # file was read and then ignored, so pressing "re-run with changes"
+    # re-solved the month from scratch and threw the edits away.
+    rerun = bool(BASE_CSV and not FROM_DAY)
+    if rerun:
+        base, base_names = load_base(BASE_CSV)
+        for (d, st), iid in base.items():
+            if (d, st) in LOCKED and iid in IIDS and (d, st) not in SKIP:
+                FIXED[(d, st)] = iid          # the admin's own choice: keep it
+        print(f"  Re-run over an existing schedule: {len(FIXED)} fixed cell(s)")
+        # Treat it as a mid-month edit starting at day 1: that path already
+        # warm-starts from the existing schedule and anchors it, so the search
+        # begins at the answer we want to keep instead of having to be dragged
+        # back to it from a fresh solve.
+        globals()["FROM_DAY"] = 1
+        midmonth = True
     if midmonth:
         base, base_names = load_base(BASE_CSV)
         # stability anchor: keep future slots equal to base where the occupant is still a current intern
@@ -1314,6 +1355,18 @@ def main():
             requested += 1
             if d not in s.idays[i]: missed.append(f"{interns[i]['name']} {d}/{MONTH}")
     honored = requested - len(missed)
+    # Did every pin survive? The warning about a pin that breaches a ceiling is
+    # only useful next to the fact of whether the person is actually there.
+    for (_d, _st), _iid in PINNED.items():
+        if _iid not in interns:
+            continue
+        _got = s.assign.get((_d, _st))
+        if _got == _iid:
+            continue
+        print(f"DIAG_PIN_LOST: הקיבוע של {interns[_iid]['name']} ל-{_d} בחודש "
+              f"({SLAB.get(_st, _st)}) לא ניתן לכיבוד — המשבצת אוישה ע\"י "
+              + (interns[_got]["name"] if _got in interns else "אף אחד") + ".")
+
     cross_days = [d for d in DAYS if s.assign[(d, "picu")] is not None
                   and interns[s.assign[(d, "picu")]]["strength"]["picu"] == 1]
     cross_who = sorted({interns[s.assign[(d, "picu")]]["name"] for d in cross_days})
