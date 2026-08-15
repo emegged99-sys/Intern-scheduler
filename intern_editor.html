@@ -808,6 +808,50 @@ function _authHeaders(){
 
 
 
+
+/* ---- banner area ------------------------------------------------------
+   Banners used to be individually fixed to the top of the viewport, so they
+   covered the toolbar underneath and stacked on top of each other. They now
+   live in one strip that reserves its own height, pushing the page down
+   instead of hiding it. */
+function bannerHost(){
+  let h=document.getElementById("bannerHost");
+  if(!h){
+    h=document.createElement("div");
+    h.id="bannerHost";
+    h.style.cssText="position:fixed;inset-block-start:0;inset-inline:0;z-index:200";
+    document.body.insertBefore(h, document.body.firstChild);
+  }
+  return h;
+}
+function syncBannerSpace(){
+  const h=document.getElementById("bannerHost");
+  const px=(h && h.children.length) ? h.getBoundingClientRect().height : 0;
+  document.body.style.paddingBlockStart = px ? px+"px" : "";
+  const bar=document.querySelector("header.bar");
+  if(bar) bar.style.top = px ? px+"px" : "";
+}
+function addBanner(id, html, wire){
+  const host=bannerHost();
+  let el=document.getElementById(id);
+  if(!el){
+    el=document.createElement("div");
+    el.id=id;
+    host.appendChild(el);
+  }
+  el.innerHTML=html;
+  if(wire) wire(el);
+  syncBannerSpace();
+  return el;
+}
+function dropBanner(id){
+  const el=document.getElementById(id);
+  if(el) el.remove();
+  syncBannerSpace();
+}
+window.addEventListener("resize", syncBannerSpace);
+const BANNER_BASE="padding:11px 20px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:13.5px";
+
 /* ================= multi-browser safety =================
    Two editors open at once used to overwrite each other silently. Correctness
    rests on a version number: we remember which version we loaded, and the
@@ -860,22 +904,24 @@ async function releaseLease(){
 
 function showHolder(h){
   _holder=h;
-  let el=document.getElementById("holderBar");
-  if(!el){
-    el=document.createElement("div"); el.id="holderBar";
-    el.style.cssText="position:fixed;inset-block-start:0;inset-inline:0;z-index:170;"+
-      "background:#FDECE7;border-bottom:2px solid #E8A98A;padding:10px 20px;"+
-      "font-size:13.5px;color:#8E2A1D;display:flex;gap:12px;align-items:center;flex-wrap:wrap";
-    document.body.appendChild(el);
-  }
-  el.innerHTML=`<b>עורך נוסף פתוח</b>
-    <span style="flex:1;min-width:200px">${escapeHtml(h&&h.name?h.name:"מישהו אחר")}
-    עורך את ${escapeHtml(ymLabel(CUR_YM||"2026-01"))} כרגע. שינויים שתעשו כאן עלולים להידחות.</span>
-    <button class="btn" id="holderReload">רענון מהשרת</button>`;
-  const rb=document.getElementById("holderReload");
-  if(rb) rb.onclick=()=>reloadFromServer(true);
+  addBanner("holderBar",
+    `<div style="${BANNER_BASE};background:#FDECE7;border-bottom:2px solid #E8A98A;color:#8E2A1D">
+       <b>עורך נוסף פתוח</b>
+       <span style="flex:1;min-width:200px">${escapeHtml(h&&h.name?h.name:"מישהו אחר")}
+       עורך את ${escapeHtml(ymLabel(CUR_YM||"2026-01"))} כרגע. שינויים שתעשו כאן עלולים להידחות.</span>
+       <button class="btn" id="holderReload">רענון מהשרת</button>
+       <button class="btn" id="holderClose" title="סגירה">✕</button>
+     </div>`,
+    el=>{
+      el.querySelector("#holderReload").onclick=async()=>{
+        // the whole point of reloading is that we are now in step: clear it
+        hideHolder();
+        await reloadFromServer(true);
+      };
+      el.querySelector("#holderClose").onclick=hideHolder;
+    });
 }
-function hideHolder(){ const el=document.getElementById("holderBar"); if(el) el.remove(); }
+function hideHolder(){ _holder=null; dropBanner("holderBar"); }
 
 /* ---- notice another browser's changes ---- */
 async function pollVersions(){
@@ -886,6 +932,14 @@ async function pollVersions(){
     const j=await r.json();
     const info=j.versions[CUR_YM];
     if(!info) return;
+    // the other editor may have finished or closed since we were warned
+    if(_holder && info.lease === undefined){
+      try{
+        const st=await fetch(_backend()+"/api/state/interns",{headers:_idHeaders(_authHeaders())});
+        const sj=await st.json();
+        if(!sj.lease || sj.lease.by===CLIENT_ID) hideHolder();
+      }catch(e){}
+    }
     if(info.status!==CUR_STATUS){ await refreshMonths(); }
     if(MY_VERSION!==null && info.version>MY_VERSION){
       if(hasUnsaved()){
@@ -907,26 +961,30 @@ function startPolling(){
 
 function showConflict(serverVersion){
   if(document.getElementById("conflictBar")) return;
-  const el=document.createElement("div"); el.id="conflictBar";
-  el.style.cssText="position:fixed;inset-block-start:0;inset-inline:0;z-index:180;"+
-    "background:#FFF3E0;border-bottom:2px solid #E8A200;padding:12px 20px;display:flex;"+
-    "gap:12px;align-items:center;flex-wrap:wrap;font-size:13.5px;color:#7A4E00";
-  el.innerHTML=`<div style="flex:1;min-width:240px">
-      <b style="display:block">הנתונים בשרת השתנו</b>
-      דפדפן אחר שמר שינויים. אפשר לטעון את הגרסה מהשרת (השינויים שלכם כאן יאבדו),
-      או לכפות את הגרסה שלכם.
-    </div>
-    <button class="btn" id="cfTake">טעינה מהשרת</button>
-    <button class="btn danger" id="cfForce">כפיית הגרסה שלי</button>`;
-  document.body.appendChild(el);
-  document.getElementById("cfTake").onclick=async()=>{ el.remove(); await reloadFromServer(true); };
-  document.getElementById("cfForce").onclick=async()=>{
-    el.remove();
-    MY_VERSION=serverVersion;          // base our write on what is there now
-    clearTimeout(_saveTimer); _saveError=null;
-    await saveToServer();
-    if(!_saveError) toast("הגרסה שלכם נשמרה");
-  };
+  addBanner("conflictBar",
+    `<div style="${BANNER_BASE};background:#FFF3E0;border-bottom:2px solid #E8A200;color:#7A4E00">
+       <div style="flex:1;min-width:240px">
+         <b style="display:block">הנתונים בשרת השתנו</b>
+         דפדפן אחר שמר שינויים. אפשר לטעון את הגרסה מהשרת (השינויים שלכם כאן יאבדו),
+         או לכפות את הגרסה שלכם.
+       </div>
+       <button class="btn" id="cfTake">טעינה מהשרת</button>
+       <button class="btn danger" id="cfForce">כפיית הגרסה שלי</button>
+     </div>`,
+    el=>{
+      el.querySelector("#cfTake").onclick=async()=>{
+        dropBanner("conflictBar");
+        hideHolder();
+        await reloadFromServer(true);
+      };
+      el.querySelector("#cfForce").onclick=async()=>{
+        dropBanner("conflictBar");
+        MY_VERSION=serverVersion;          // base our write on what is there now
+        clearTimeout(_saveTimer); _saveError=null;
+        await saveToServer();
+        if(!_saveError) toast("הגרסה שלכם נשמרה");
+      };
+    });
 }
 
 async function reloadFromServer(announce){
@@ -948,67 +1006,65 @@ async function reloadFromServer(announce){
 /* ---- the month is frozen and that is what blocks saving ---- */
 function offerUnfreeze(msg){
   if(document.getElementById("unfreezeBanner")) return;
-  const d=document.createElement("div");
-  d.id="unfreezeBanner";
-  d.style.cssText="position:fixed;inset-block-start:0;inset-inline:0;z-index:160;background:#EDF0F6;"+
-    "border-bottom:2px solid #8194b8;padding:12px 20px;display:flex;align-items:center;gap:14px;"+
-    "flex-wrap:wrap;box-shadow:0 4px 16px rgba(0,0,0,.12)";
-  d.innerHTML=`<div style="flex:1;min-width:260px;font-size:13.5px;color:#1F3864">
-      <b style="display:block;margin-bottom:2px">🔒 ${escapeHtml(ymLabel(CUR_YM||"2026-01"))} מוקפא</b>
-      ${escapeHtml(msg||"")} כדי לערוך או להעלות נתונים יש לבטל את ההקפאה.
-    </div>
-    <button id="unfreezeGo" class="btn primary">ביטול הקפאה</button>
-    <button id="unfreezeSkip" class="btn">התעלם</button>`;
-  document.body.appendChild(d);
-  document.getElementById("unfreezeSkip").onclick=()=>d.remove();
-  document.getElementById("unfreezeGo").onclick=async()=>{
-    const btn=document.getElementById("unfreezeGo");
-    btn.disabled=true; btn.textContent="מבטל…";
-    try{
-      await srvApi("/api/months/"+CUR_YM+"/freeze",{method:"POST",body:{frozen:false}});
-      await refreshMonths();
-      d.remove();
-      toast("ההקפאה בוטלה — אפשר לשמור עכשיו");
-    }catch(e){
-      btn.disabled=false; btn.textContent="ביטול הקפאה";
-      toast(e.message,true);
-    }
-  };
+  addBanner("unfreezeBanner",
+    `<div style="${BANNER_BASE};background:#EDF0F6;border-bottom:2px solid #8194b8;color:#1F3864">
+       <div style="flex:1;min-width:260px">
+         <b style="display:block;margin-bottom:2px">🔒 ${escapeHtml(ymLabel(CUR_YM||"2026-01"))} מוקפא</b>
+         ${escapeHtml(msg||"")} כדי לערוך או להעלות נתונים יש לבטל את ההקפאה.
+       </div>
+       <button id="unfreezeGo" class="btn primary">ביטול הקפאה</button>
+       <button id="unfreezeSkip" class="btn">התעלם</button>
+     </div>`,
+    el=>{
+      el.querySelector("#unfreezeSkip").onclick=()=>dropBanner("unfreezeBanner");
+      el.querySelector("#unfreezeGo").onclick=async()=>{
+        const btn=el.querySelector("#unfreezeGo");
+        btn.disabled=true; btn.textContent="מבטל…";
+        try{
+          await srvApi("/api/months/"+CUR_YM+"/freeze",{method:"POST",body:{frozen:false}});
+          await refreshMonths();
+          dropBanner("unfreezeBanner");
+          toast("ההקפאה בוטלה — אפשר לשמור עכשיו");
+        }catch(e){
+          btn.disabled=false; btn.textContent="ביטול הקפאה";
+          toast(e.message,true);
+        }
+      };
+    });
 }
 
 /* ---- recover from an empty server month ---- */
 function offerUpload(n){
   if(document.getElementById("uploadBanner")) return;
-  const d=document.createElement("div");
-  d.id="uploadBanner";
-  d.style.cssText="position:fixed;inset-block-start:0;inset-inline:0;z-index:150;background:#FFF3E0;"+
-    "border-bottom:2px solid #E8A200;padding:12px 20px;display:flex;align-items:center;gap:14px;"+
-    "flex-wrap:wrap;box-shadow:0 4px 16px rgba(0,0,0,.12)";
-  d.innerHTML=`<div style="flex:1;min-width:260px;font-size:13.5px;color:#7A4E00">
-      <b style="display:block;margin-bottom:2px">החודש בשרת ריק</b>
-      בדפדפן הזה יש ${n} מתמחים, אבל בחודש הנבחר בשרת אין אף אחד. עד שיועלו,
-      השיבוץ לא ישויך לאיש והמתמחים לא יראו לוח.
-    </div>
-    <button id="uploadGo" class="btn primary">העלאת הנתונים לשרת</button>
-    <button id="uploadSkip" class="btn">התעלם</button>`;
-  document.body.appendChild(d);
-  document.getElementById("uploadSkip").onclick=()=>d.remove();
-  document.getElementById("uploadGo").onclick=async()=>{
-    const btn=document.getElementById("uploadGo");
-    btn.disabled=true; btn.textContent="מעלה…";
-    try{
-      _lastServerHash=null;              // we intend to overwrite the empty state
-      _saveError=null;
-      await saveToServer();
-      if(_saveError) throw new Error(_saveError);
-      await refreshMonths();
-      d.remove();
-      toast("הנתונים הועלו לשרת");
-    }catch(e){
-      btn.disabled=false; btn.textContent="נסו שוב";
-      toast("ההעלאה נכשלה: "+e.message,true);
-    }
-  };
+  addBanner("uploadBanner",
+    `<div style="${BANNER_BASE};background:#FFF3E0;border-bottom:2px solid #E8A200;color:#7A4E00">
+       <div style="flex:1;min-width:260px">
+         <b style="display:block;margin-bottom:2px">החודש בשרת ריק</b>
+         בדפדפן הזה יש ${n} מתמחים, אבל בחודש הנבחר בשרת אין אף אחד. עד שיועלו,
+         השיבוץ לא ישויך לאיש והמתמחים לא יראו לוח.
+       </div>
+       <button id="uploadGo" class="btn primary">העלאת הנתונים לשרת</button>
+       <button id="uploadSkip" class="btn">התעלם</button>
+     </div>`,
+    el=>{
+      el.querySelector("#uploadSkip").onclick=()=>dropBanner("uploadBanner");
+      el.querySelector("#uploadGo").onclick=async()=>{
+        const btn=el.querySelector("#uploadGo");
+        btn.disabled=true; btn.textContent="מעלה…";
+        try{
+          _lastServerHash=null;              // we intend to overwrite the empty state
+          _saveError=null;
+          await saveToServer();
+          if(_saveError) throw new Error(_saveError);
+          await refreshMonths();
+          dropBanner("uploadBanner");
+          toast("הנתונים הועלו לשרת");
+        }catch(e){
+          btn.disabled=false; btn.textContent="נסו שוב";
+          toast("ההעלאה נכשלה: "+e.message,true);
+        }
+      };
+    });
 }
 
 /* ---- ask for the server password once, in-app ---- */
@@ -1394,6 +1450,10 @@ function renderResults(data, switchToTab){
   // stats banner
   const gaps = data.gaps || [];
   lastGaps = gaps;
+  // An archived month carries its own holidays; a fresh run uses the ones
+  // currently in the editor. Either way, pin them so the summary counts the
+  // month being displayed and not whatever month is selected.
+  lastHols = data.holidays || (typeof hols !== "undefined" ? hols : {}) || {};
   const statsDiv = $("#resStats");
   let gapHtml = "";
   if(gaps.length){
@@ -1451,10 +1511,12 @@ function rebuildResultsTable(){
   for(const [, label] of ST_DISPLAY) html += `<th>${label}</th>`;
   html += `</tr></thead><tbody>`;
   for(let d=1; d<=ndays; d++){
-    const dow = new Date(lastYear, lastMonth-1, d).getDay();
-    const we = (dow===5||dow===6);
-    const dowLabel = DOW_HEB_SHORT[dow] + "'";
-    html += `<tr class="${we?'wknd':''}"><td class="daycol">${d}/${lastMonth}</td><td class="daycol">${dowLabel}</td>`;
+    const f = dayFlags(lastYear, lastMonth, d);
+    const dowLabel = DOW_HEB_SHORT[f.dow] + "'";
+    const holTag = f.holiday
+      ? `<div class="hint" style="color:#46278F">${escapeHtml(f.holiday)}</div>` : "";
+    html += `<tr class="${f.isWknd?'wknd':''}"><td class="daycol">${d}/${lastMonth}</td>` +
+            `<td class="daycol">${dowLabel}${holTag}</td>`;
     for(const [st] of ST_DISPLAY){
       const k = cellKey(d, st);
       if(editExternal[k]){
@@ -1482,6 +1544,31 @@ function rebuildResultsTable(){
   t.innerHTML = html + `</tbody>`;
 }
 
+
+/* ---- day types, matching the solver ----------------------------------
+   A holiday eve counts as Friday and a holiday as Saturday, for weekend
+   balance and for the maxFriday / maxSaturday / maxWeekend ceilings. Thursday
+   stays the calendar Thursday — the solver never reassigns it — so a holiday
+   eve falling on a Thursday is counted in both columns, exactly as the
+   scheduler counts it. Without this the summary here disagreed with the
+   fairness sheet in the workbook, which has always used the solver's flags. */
+let lastHols = null;          // holidays of the month currently displayed
+function resultHolidays(){
+  return lastHols || (typeof hols !== "undefined" ? hols : {}) || {};
+}
+function dayFlags(year, month, d){
+  const dow = new Date(year, month-1, d).getDay();       // 0=Sun … 6=Sat
+  const key = `${year}-${String(month).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+  const h = resultHolidays()[key];
+  let isFri = (dow===5), isSat = (dow===6);
+  if(h){
+    if(h.kind === "eve") isFri = true;
+    else isSat = true;
+  }
+  return {dow, isThu: dow===4, isFri, isSat, isWknd: isFri||isSat,
+          holiday: h ? (h.name || (h.kind==="eve" ? "ערב חג" : "חג")) : null};
+}
+
 function rebuildSummary(){
   // build from editGrid (not original assignments)
   const counts = {};
@@ -1492,10 +1579,11 @@ function rebuildSummary(){
     if(!counts[v.name]) counts[v.name] = {total:0, thu:0, fri:0, sat:0, wknd:0, st:{}};
     const c = counts[v.name];
     c.total++;
-    const dow = new Date(lastYear, lastMonth-1, d).getDay();
-    if(dow===4){ c.thu++; }
-    if(dow===5){ c.fri++; c.wknd++; }
-    if(dow===6){ c.sat++; c.wknd++; }
+    const f = dayFlags(lastYear, lastMonth, d);
+    if(f.isThu){ c.thu++; }
+    if(f.isFri){ c.fri++; }
+    if(f.isSat){ c.sat++; }
+    if(f.isWknd){ c.wknd++; }
     c.st[st] = (c.st[st]||0) + 1;
   }
   const names = Object.keys(counts).sort((a,b)=>counts[b].total - counts[a].total);
@@ -2193,6 +2281,7 @@ async function openArchived(ym){
   if(!m.assignment.length){ toast("אין שיבוץ שמור לחודש הזה"); return; }
   const [y,mo]=ym.split("-").map(Number);
   renderResults({assignments:m.assignment, external:m.external||{},
+                 holidays:m.holidays||{},
                  year:y, month:mo, stats:m.stats||"", xlsx:null}, true);
   toast("מוצג שיבוץ שמור — "+ymLabel(ym));
 }

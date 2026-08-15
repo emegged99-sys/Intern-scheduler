@@ -466,10 +466,25 @@ def generate():
         cmd = [sys.executable or "python3", SCHEDULER,
                interns_path, year, month, out_path]
 
+        # Echo the holidays back with the result: the summary in the results
+        # view has to count a holiday eve as a Friday exactly as the solver
+        # does, and for an archived month it cannot read them from the editor's
+        # current state.
+        hol_data = {}
         if holidays_file is not None and holidays_file.filename:
             holidays_path = os.path.join(workdir, "holidays.csv")
             holidays_file.save(holidays_path)
             cmd += ["--holidays", holidays_path]
+            try:
+                with open(holidays_path, encoding="utf-8-sig") as hf:
+                    for row in csv.DictReader(hf):
+                        date = (row.get("date") or "").strip()
+                        if not date:
+                            continue
+                        kind = "eve" if (row.get("kind") or "").strip().lower() == "eve" else "day"
+                        hol_data[date] = {"kind": kind, "name": (row.get("name") or "").strip()}
+            except Exception:                                      # noqa: BLE001
+                hol_data = {}
 
         ext_data = {}
         if external_file is not None and external_file.filename:
@@ -622,6 +637,7 @@ def generate():
             assignments=assignments,
             external=ext_data,
             xlsx=xlsx_b64,
+            holidays=hol_data,
             partial=bool(gaps),
             gaps=gaps,
             diagnostics=diagnostics,
